@@ -1,0 +1,17 @@
+# CODEOWNERS for specter-sdk
+#
+# Each section requires explicit review before merge. The `*` entry is the
+# fallback owner for everything else.
+#
+# Replace the placeholder GitHub handles below with the actual maintainer
+# logins before enforcing branch protection. The PR template references this
+# file, so empty owners means no required review.
+
+* @pranshurastogi
+
+/rust/                  @pranshurastogi
+/vendor/                @pranshurastogi
+/scripts/               @pranshurastogi
+/packages/sdk/          @pranshurastogi
+/.github/workflows/     @pranshurastogi
+SECURITY.md             @pranshurastogi
