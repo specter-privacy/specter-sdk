@@ -160,7 +160,8 @@ jobs:
           wasm-pack --version
 
       - name: Run WASM tests (Node)
-        run: wasm-pack test rust/specter-wasm --node
+        working-directory: rust/specter-wasm
+        run: wasm-pack test --node
 
   ts-build-test-lint:
     name: TypeScript build + test + lint
