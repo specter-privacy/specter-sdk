@@ -100,9 +100,12 @@ jobs:
           workspaces: ". -> target"
           shared-key: rust-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
 
-      - name: Install wasm-pack
+      - name: Install wasm-pack v0.12.1
         run: |
-          curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+          curl -fsSL "https://github.com/rustwasm/wasm-pack/releases/download/v0.12.1/wasm-pack-v0.12.1-x86_64-unknown-linux-musl.tar.gz" \
+            -o /tmp/wasm-pack.tar.gz
+          tar -xzf /tmp/wasm-pack.tar.gz -C /tmp
+          sudo install -m755 /tmp/wasm-pack-v0.12.1-x86_64-unknown-linux-musl/wasm-pack /usr/local/bin/wasm-pack
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -147,8 +150,12 @@ jobs:
           workspaces: ". -> target"
           shared-key: rust-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
 
-      - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      - name: Install wasm-pack v0.12.1
+        run: |
+          curl -fsSL "https://github.com/rustwasm/wasm-pack/releases/download/v0.12.1/wasm-pack-v0.12.1-x86_64-unknown-linux-musl.tar.gz" \
+            -o /tmp/wasm-pack.tar.gz
+          tar -xzf /tmp/wasm-pack.tar.gz -C /tmp
+          sudo install -m755 /tmp/wasm-pack-v0.12.1-x86_64-unknown-linux-musl/wasm-pack /usr/local/bin/wasm-pack
 
       - name: Run WASM tests (Node)
         run: wasm-pack test rust/specter-wasm --node
