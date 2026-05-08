@@ -105,7 +105,8 @@ jobs:
           curl -fsSL "https://github.com/rustwasm/wasm-pack/releases/download/v0.12.1/wasm-pack-v0.12.1-x86_64-unknown-linux-musl.tar.gz" \
             -o /tmp/wasm-pack.tar.gz
           tar -xzf /tmp/wasm-pack.tar.gz -C /tmp
-          sudo install -m755 /tmp/wasm-pack-v0.12.1-x86_64-unknown-linux-musl/wasm-pack /usr/local/bin/wasm-pack
+          install -m755 /tmp/wasm-pack-v0.12.1-x86_64-unknown-linux-musl/wasm-pack ~/.cargo/bin/wasm-pack
+          wasm-pack --version
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -155,7 +156,8 @@ jobs:
           curl -fsSL "https://github.com/rustwasm/wasm-pack/releases/download/v0.12.1/wasm-pack-v0.12.1-x86_64-unknown-linux-musl.tar.gz" \
             -o /tmp/wasm-pack.tar.gz
           tar -xzf /tmp/wasm-pack.tar.gz -C /tmp
-          sudo install -m755 /tmp/wasm-pack-v0.12.1-x86_64-unknown-linux-musl/wasm-pack /usr/local/bin/wasm-pack
+          install -m755 /tmp/wasm-pack-v0.12.1-x86_64-unknown-linux-musl/wasm-pack ~/.cargo/bin/wasm-pack
+          wasm-pack --version
 
       - name: Run WASM tests (Node)
         run: wasm-pack test rust/specter-wasm --node
