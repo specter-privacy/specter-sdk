@@ -33,6 +33,7 @@ pnpm --filter @specterpq/sdk test
 pnpm --filter @specterpq/sdk lint
 
 log "tarball preview"
-pnpm --filter @specterpq/sdk pack --dry-run
+pnpm --filter @specterpq/sdk pack
+find packages/sdk -maxdepth 1 -name '*.tgz' -exec tar -tzf {} \; -exec rm -f {} \;
 
 log "all pre-publish checks passed"
