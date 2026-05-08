@@ -1,0 +1,79 @@
+{
+  "name": "@specterpq/sdk",
+  "version": "0.0.0",
+  "description": "Browser-first SDK for SPECTER, the post-quantum stealth address protocol. Generates ML-KEM-768 keys, builds meta-addresses, encapsulates and decapsulates ephemeral secrets, computes view-tags, and derives stealth Ethereum and Sui addresses entirely in the user's browser via Rust compiled to WebAssembly.",
+  "license": "Apache-2.0",
+  "author": "SPECTER Team <hello@specterpq.com>",
+  "homepage": "https://specterpq.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/specter-privacy/specter-sdk.git",
+    "directory": "packages/sdk"
+  },
+  "bugs": {
+    "url": "https://github.com/specter-privacy/specter-sdk/issues"
+  },
+  "keywords": [
+    "specter",
+    "stealth-address",
+    "ml-kem",
+    "kyber",
+    "post-quantum",
+    "wasm",
+    "ethereum",
+    "sui",
+    "ens",
+    "suins",
+    "privacy"
+  ],
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build:wasm": "node ./scripts/build-wasm.mjs",
+    "build": "tsup && node ./scripts/copy-wasm.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:browser": "wasm-pack test ../../rust/specter-wasm --headless --chrome --firefox",
+    "lint": "eslint . --max-warnings=0",
+    "lint:fix": "eslint . --fix",
+    "typecheck": "tsc --noEmit",
+    "clean": "rimraf dist src/wasm/web src/wasm/node",
+    "prepublishOnly": "../../scripts/pre-publish.sh"
+  },
+  "dependencies": {
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@vitest/coverage-v8": "^2.1.8",
+    "rimraf": "^6.0.1",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

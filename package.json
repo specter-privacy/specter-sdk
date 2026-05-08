@@ -1,0 +1,51 @@
+{
+  "name": "specter-sdk-monorepo",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Monorepo for @specterpq/sdk: post-quantum stealth address SDK with browser-local key generation via Rust WASM",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/specter-privacy/specter-sdk.git"
+  },
+  "homepage": "https://specterpq.com",
+  "packageManager": "pnpm@10.15.1",
+  "engines": {
+    "node": ">=20",
+    "pnpm": ">=10"
+  },
+  "scripts": {
+    "build:wasm": "pnpm --filter @specterpq/sdk build:wasm",
+    "build": "pnpm --filter @specterpq/sdk build:wasm && pnpm -r --filter \"./packages/**\" build",
+    "test": "pnpm -r --filter \"./packages/**\" test",
+    "test:browser": "wasm-pack test rust/specter-wasm --headless --chrome --firefox",
+    "test:coverage": "pnpm -r --filter \"./packages/**\" test:coverage",
+    "lint": "pnpm -r --filter \"./packages/**\" lint && cargo fmt --manifest-path rust/specter-wasm/Cargo.toml -- --check",
+    "lint:fix": "pnpm -r --filter \"./packages/**\" lint:fix && cargo fmt --manifest-path rust/specter-wasm/Cargo.toml",
+    "typecheck": "pnpm -r --filter \"./packages/**\" typecheck",
+    "clippy": "cargo clippy --manifest-path rust/specter-wasm/Cargo.toml --all-targets -- -D warnings",
+    "rust:test": "cargo test --manifest-path rust/specter-wasm/Cargo.toml",
+    "vendor:sync": "scripts/sync-backend.sh",
+    "vendor:verify": "scripts/verify-vendor.sh",
+    "ci:full": "pnpm vendor:verify && pnpm clippy && pnpm rust:test && pnpm build && pnpm test && pnpm lint",
+    "changeset": "changeset",
+    "version": "changeset version",
+    "release": "pnpm build && changeset publish"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^2.27.10",
+    "@eslint/js": "^9.39.4",
+    "@types/node": "^22.10.2",
+    "eslint": "^9.17.0",
+    "prettier": "^3.4.2",
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.1"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}

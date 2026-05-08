@@ -1,0 +1,24 @@
+[package]
+name = "specter-core"
+version = "0.1.0"
+edition = "2021"
+authors = ["SPECTER Team"]
+license = "MIT OR Apache-2.0"
+description = "Core types, errors, and traits for SPECTER protocol"
+
+[dependencies]
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0" }
+hex = { version = "0.4", features = ["serde"] }
+# Error handling
+thiserror = { version = "1.0" }
+# Security
+zeroize = { version = "1.7", features = ["derive"] }
+# Async
+async-trait = { version = "0.1" }
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+[dev-dependencies]
+proptest = { version = "1.4" }
+test-case = { version = "3.3" }

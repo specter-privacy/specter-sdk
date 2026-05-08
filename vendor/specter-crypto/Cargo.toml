@@ -1,0 +1,30 @@
+[package]
+name = "specter-crypto"
+version = "0.1.0"
+edition = "2021"
+authors = ["SPECTER Team"]
+license = "MIT OR Apache-2.0"
+description = "Post-quantum cryptographic operations for SPECTER (ML-KEM-768, SHAKE256)"
+
+[dependencies]
+specter-core = { path = "../specter-core" }
+
+# Post-quantum cryptography
+ml-kem = { version = "0.2", features = ["zeroize"] }
+# Hashing
+sha3 = { version = "0.10" }
+# Security
+zeroize = { version = "1.7", features = ["derive"] }
+subtle = { version = "2.5" }
+rand = { version = "0.8" }
+# Utilities
+hex = { version = "0.4", features = ["serde"] }
+# Ethereum address from secp256k1 (so eth_private_key matches stealth_address)
+k256 = { version = "0.13", features = ["ecdsa"] }
+
+# Sui address from secp256k1 (blake2b-256 of scheme || compressed pubkey)
+blake2 = "0.10"
+
+[dev-dependencies]
+proptest = { version = "1.4" }
+rand_chacha = { version = "0.3" }
