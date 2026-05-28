@@ -38,6 +38,7 @@ jobs:
         with:
           node-version: 20
           cache: pnpm
+          registry-url: 'https://registry.npmjs.org'
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -51,12 +52,12 @@ jobs:
           workspaces: ". -> target"
           shared-key: rust-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
 
-      - name: Install wasm-pack v0.14.0
+      - name: Install wasm-pack v0.15.0
         run: |
-          curl -fsSL "https://github.com/rustwasm/wasm-pack/releases/download/v0.14.0/wasm-pack-v0.14.0-x86_64-unknown-linux-musl.tar.gz" \
+          curl -fsSL "https://github.com/rustwasm/wasm-pack/releases/download/v0.15.0/wasm-pack-v0.15.0-x86_64-unknown-linux-musl.tar.gz" \
             -o /tmp/wasm-pack.tar.gz
           tar -xzf /tmp/wasm-pack.tar.gz -C /tmp
-          install -m755 /tmp/wasm-pack-v0.14.0-x86_64-unknown-linux-musl/wasm-pack ~/.cargo/bin/wasm-pack
+          install -m755 /tmp/wasm-pack-v0.15.0-x86_64-unknown-linux-musl/wasm-pack ~/.cargo/bin/wasm-pack
           wasm-pack --version
 
       - name: Install JS dependencies
@@ -91,6 +92,8 @@ jobs:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: 'false'
+          # Skip prepublishOnly in CI — WASM build + tests already ran above
+          NPM_CONFIG_IGNORE_SCRIPTS: 'true'
 
       - name: Summarise outcome
         if: always()
