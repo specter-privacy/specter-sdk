@@ -210,4 +210,154 @@ describe('createSpecterApiClient', () => {
       }),
     ).toThrow(SpecterSdkError);
   });
+
+  it('covers optional API response aliases and scan request fields', async () => {
+    const recipient = generateSpecterKeys();
+    const meta = metaAddressFromPublicKeys(
+      recipient.spending.publicKey,
+      recipient.viewing.publicKey,
+    );
+    const payment = createStealthPayment(meta.hex);
+    const scan = scanAnnouncement(
+      {
+        ephemeralCiphertext: payment.ephemeralCiphertext,
+        viewTag: payment.viewTag,
+      },
+      recipient.viewing,
+      recipient.spending.publicKey,
+    );
+    expect(scan.isMatch).toBe(true);
+    if (!scan.isMatch) return;
+
+    const channelId = `0x${'11'.repeat(32)}`;
+    const calls: CapturedRequest[] = [];
+    const fetchImpl = (url: string, init?: RequestInit): Promise<Response> => {
+      calls.push({ url, init });
+      if (url.endsWith('/api/v1/stealth/create')) {
+        return Promise.resolve(jsonResponse({
+          payment_id: 'pay_alias',
+          stealth_address: payment.ethAddress,
+          stealth_sui_address: payment.suiAddress,
+          ephemeral_ciphertext: payment.ephemeralCiphertext,
+          view_tag: payment.viewTag,
+        }));
+      }
+      if (url.endsWith('/api/v1/registry/announcements')) {
+        return Promise.resolve(jsonResponse({
+          id: 99,
+          announcement: {
+            id: 99,
+            ephemeral_ciphertext: payment.ephemeralCiphertext,
+            view_tag: payment.viewTag,
+            timestamp: 123,
+            channel_id: channelId,
+            block_number: 456,
+            tx_hash: '0xabc',
+            amount: '1',
+            chain: 'ethereum',
+          },
+        }));
+      }
+      return Promise.resolve(jsonResponse({
+        results: [
+          {
+            stealth_address: scan.stealthKeys.ethAddress,
+            stealth_sui_address: scan.stealthKeys.suiAddress,
+            eth_private_key: scan.stealthKeys.ethPrivateKey,
+            stealth_sk: scan.stealthKeys.ethPrivateKey,
+            payment_id: 'pay_alias',
+            timestamp: 321,
+          },
+        ],
+      }));
+    };
+
+    const client = createSpecterApiClient({
+      baseUrl: 'http://localhost:8787',
+      headers: { authorization: 'Bearer test' },
+      fetch: fetchImpl,
+    });
+    const remotePayment = await client.createStealthPaymentRemote(meta.bytes);
+    const published = await client.publishAnnouncement({ paymentId: 'pay_alias' });
+    const remoteScan = await client.scanRemote({
+      announcements: [
+        {
+          ephemeralCiphertext: payment.ephemeralCiphertext,
+          viewTag: payment.viewTag,
+        },
+      ],
+      viewingSk: recipient.viewing.secretKey,
+      spendingPk: recipient.spending.publicKey,
+      spendingSk: recipient.spending.secretKey,
+      viewTags: [payment.viewTag],
+      fromTimestamp: 1,
+      toTimestamp: 2,
+    });
+
+    expect(remotePayment.announcement).toBeUndefined();
+    expect(published.announcementId).toBe(99);
+    expect(published.announcement?.channelId).toBe(channelId);
+    expect(published.announcement?.blockNumber).toBe(456);
+    expect(remoteScan.discoveries[0]?.paymentId).toBe('pay_alias');
+    expect(remoteScan.discoveries[0]?.timestamp).toBe(321);
+    expect(readBody(calls[2]?.init)).toEqual({
+      announcements: [
+        {
+          ephemeral_ciphertext: payment.ephemeralCiphertext,
+          view_tag: payment.viewTag,
+        },
+      ],
+      viewing_sk: recipient.viewing.secretKey,
+      spending_pk: recipient.spending.publicKey,
+      spending_sk: recipient.spending.secretKey,
+      view_tags: [payment.viewTag],
+      from_timestamp: 1,
+      to_timestamp: 2,
+    });
+  });
+
+  it('reports invalid JSON, generic API failures, and malformed announcements', async () => {
+    const invalidJsonClient = createSpecterApiClient({
+      baseUrl: 'https://api.example.test',
+      fetch: () => Promise.resolve(new Response('{', { status: 200 })),
+    });
+    await expect(invalidJsonClient.generateKeysRemote()).rejects.toMatchObject({
+      code: 'INVALID_API_RESPONSE',
+      message: 'API returned invalid JSON',
+    });
+
+    const genericFailureClient = createSpecterApiClient({
+      baseUrl: 'https://api.example.test',
+      fetch: () => Promise.resolve(jsonResponse({}, { status: 503 })),
+    });
+    await expect(genericFailureClient.generateKeysRemote()).rejects.toMatchObject({
+      code: 'HTTP_ERROR',
+      recoverable: true,
+      message: 'SPECTER API request failed with status 503',
+    });
+
+    const recipient = generateSpecterKeys();
+    const meta = metaAddressFromPublicKeys(
+      recipient.spending.publicKey,
+      recipient.viewing.publicKey,
+    );
+    const payment = createStealthPayment(meta.hex);
+    const malformedAnnouncementClient = createSpecterApiClient({
+      baseUrl: 'https://api.example.test',
+      fetch: () => Promise.resolve(jsonResponse({
+        payment_id: 'pay_bad',
+        stealth_address: payment.ethAddress,
+        stealth_sui_address: payment.suiAddress,
+        ephemeral_ciphertext: payment.ephemeralCiphertext,
+        view_tag: payment.viewTag,
+        announcement: {
+          view_tag: payment.viewTag,
+        },
+      })),
+    });
+    await expect(malformedAnnouncementClient.createStealthPaymentRemote(meta.hex)).rejects.toMatchObject({
+      code: 'INVALID_API_RESPONSE',
+      message: 'announcement is missing ephemeral ciphertext',
+    });
+  });
 });
