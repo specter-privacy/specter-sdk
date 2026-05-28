@@ -58,7 +58,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "test:browser": "wasm-pack test ../../rust/specter-wasm --headless --chrome --firefox",
+    "test:browser": "wasm-pack test --headless --chrome --firefox ../../rust/specter-wasm",
     "lint": "eslint . --max-warnings=0",
     "lint:fix": "eslint . --fix",
     "typecheck": "tsc --noEmit",

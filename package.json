@@ -19,7 +19,7 @@
     "build:wasm": "pnpm --filter @specterpq/sdk build:wasm",
     "build": "pnpm --filter @specterpq/sdk build:wasm && pnpm -r --filter \"./packages/**\" build",
     "test": "pnpm -r --filter \"./packages/**\" test",
-    "test:browser": "wasm-pack test rust/specter-wasm --headless --chrome --firefox",
+    "test:browser": "wasm-pack test --headless --chrome --firefox rust/specter-wasm",
     "test:coverage": "pnpm -r --filter \"./packages/**\" test:coverage",
     "lint": "pnpm -r --filter \"./packages/**\" lint && cargo fmt --manifest-path rust/specter-wasm/Cargo.toml -- --check",
     "lint:fix": "pnpm -r --filter \"./packages/**\" lint:fix && cargo fmt --manifest-path rust/specter-wasm/Cargo.toml",
