@@ -44,6 +44,12 @@ export {
 } from './payments.js';
 
 export {
+  createSpecterApiClient,
+  type SpecterApiClient,
+  type SpecterApiClientOptions,
+} from './http.js';
+
+export {
   ETH_ADDRESS_SIZE,
   KYBER_CIPHERTEXT_SIZE,
   KYBER_PUBLIC_KEY_SIZE,
@@ -76,6 +82,14 @@ export type {
   MetaAddressBundle,
   MetaAddressHex,
   MetaAddressMetadata,
+  AnnouncementDto,
+  PublishAnnouncementInput,
+  PublishAnnouncementResponse,
+  RemoteDiscovery,
+  RemoteGeneratedKeys,
+  RemoteScanRequest,
+  RemoteScanResponse,
+  RemoteStealthPayment,
   ScanResult,
   SharedSecretHex,
   SpecterKeys,

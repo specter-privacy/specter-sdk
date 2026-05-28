@@ -91,6 +91,7 @@ export const StealthEthPrivateInput = fixedSizeHexOrBytes(
   'eth_private_key',
 );
 export const MetaAddressBytesInput = fixedSizeHexOrBytes(META_ADDRESS_SIZE, 'meta_address');
+export const ChannelIdInput = fixedSizeHexOrBytes(32, 'channel_id');
 export const ViewTagInput = z
   .number()
   .int()
@@ -106,6 +107,77 @@ export const MetaAddressMetadataInput = z
     createdAt: z.number().int().nonnegative().max(2 ** 53 - 1).optional(),
   })
   .strict();
+
+export const ApiHex = z.string().regex(/^0x[0-9a-fA-F]*$/u, {
+  message: 'invalid hex encoding',
+});
+
+export const ApiPaymentId = z.string().min(1).max(256);
+
+export const ApiAnnouncementDto = z
+  .object({
+    id: z.number().int().nonnegative().optional(),
+    ephemeral_key: ApiHex.optional(),
+    ephemeral_ciphertext: ApiHex.optional(),
+    view_tag: ViewTagInput,
+    timestamp: z.number().int().nonnegative().optional(),
+    channel_id: ApiHex.optional().nullable(),
+    block_number: z.number().int().nonnegative().optional().nullable(),
+    tx_hash: z.string().min(1).optional().nullable(),
+    amount: z.string().min(1).optional().nullable(),
+    chain: z.string().min(1).optional().nullable(),
+  })
+  .passthrough();
+
+export const ApiGenerateKeysResponse = z
+  .object({
+    spending_pk: ApiHex,
+    spending_sk: ApiHex,
+    viewing_pk: ApiHex,
+    viewing_sk: ApiHex,
+    meta_address: ApiHex,
+  })
+  .strict();
+
+export const ApiCreateStealthResponse = z
+  .object({
+    payment_id: ApiPaymentId,
+    stealth_address: ApiHex,
+    stealth_sui_address: ApiHex,
+    ephemeral_ciphertext: ApiHex,
+    view_tag: ViewTagInput,
+    announcement: ApiAnnouncementDto.optional(),
+  })
+  .passthrough();
+
+export const ApiPublishAnnouncementResponse = z
+  .object({
+    announcement_id: z.number().int().nonnegative().optional(),
+    id: z.number().int().nonnegative().optional(),
+    announcement: ApiAnnouncementDto.optional(),
+  })
+  .passthrough();
+
+export const ApiDiscoveryDto = z
+  .object({
+    eth_address: ApiHex.optional(),
+    stealth_address: ApiHex.optional(),
+    sui_address: ApiHex.optional(),
+    stealth_sui_address: ApiHex.optional(),
+    eth_private_key: ApiHex,
+    stealth_sk: ApiHex,
+    announcement_id: z.number().int().nonnegative().optional(),
+    payment_id: z.string().min(1).optional(),
+    timestamp: z.number().int().nonnegative().optional(),
+  })
+  .passthrough();
+
+export const ApiScanResponse = z
+  .object({
+    discoveries: z.array(ApiDiscoveryDto).optional(),
+    results: z.array(ApiDiscoveryDto).optional(),
+  })
+  .passthrough();
 
 export type ValidatedMetaAddressMetadata = z.infer<typeof MetaAddressMetadataInput>;
 

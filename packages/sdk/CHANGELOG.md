@@ -1,5 +1,23 @@
 # @specterpq/sdk
 
+## 0.2.0
+
+### Minor Changes
+
+- Added an explicit trusted SPECTER API client via `createSpecterApiClient`.
+
+  The new HTTP surface supports remote key generation, server-authoritative
+  stealth payment creation with `payment_id`, registry announcement publishing,
+  and remote scanning. Local crypto helpers remain offline-by-default, and
+  secret-bearing remote fields keep the same redaction behavior as local WASM
+  results.
+
+- Hardened protocol tests and documentation around the updated key roles.
+
+  Full payment flows now exercise encapsulation to the recipient viewing public
+  key and decapsulation with the viewing secret key, while stealth address
+  derivation remains bound to the spending public key.
+
 ## 0.1.0
 
 ### Minor Changes

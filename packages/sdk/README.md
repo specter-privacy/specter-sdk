@@ -2,9 +2,11 @@
 
 Production-grade TypeScript SDK for **SPECTER**, a post-quantum stealth
 address protocol powered by ML-KEM-768 (Kyber). Cryptographic operations run
-locally through Rust compiled to WebAssembly.
+locally through Rust compiled to WebAssembly, with a separate opt-in HTTP client
+for trusted SPECTER API deployments.
 
-No secret keys leave the device.
+Local crypto helpers do not send secrets over the network. Remote helpers are
+explicit and should only target infrastructure you trust.
 
 ---
 
@@ -22,6 +24,7 @@ No secret keys leave the device.
   - [View-tag APIs](#view-tag-apis)
   - [Stealth derivation APIs](#stealth-derivation-apis)
   - [High-level payment flow APIs](#high-level-payment-flow-apis)
+  - [Trusted HTTP API client](#trusted-http-api-client)
   - [Constants](#constants)
   - [Errors](#errors)
 - [Type notes](#type-notes)
@@ -95,6 +98,7 @@ const meta = metaAddressFromPublicKeys(
 // Sender flow
 const payment = createStealthPayment(meta.hex);
 // payment: { ephemeralCiphertext, viewTag, ethAddress, suiAddress }
+// viewTag is per-payment: SHAKE256(DOMAIN_VIEW_TAG, shared_secret, 32)[0]
 
 // Recipient scan flow
 const scan = scanAnnouncement(
@@ -369,6 +373,69 @@ const matches = results.filter((r) => r.isMatch);
 
 ---
 
+### Trusted HTTP API client
+
+The default crypto API is local-first. Use `createSpecterApiClient` only when
+your app intentionally trusts a SPECTER API deployment to orchestrate payments,
+publish server-held announcements, or scan remotely.
+
+```ts
+import { createSpecterApiClient } from '@specterpq/sdk';
+
+const api = createSpecterApiClient({
+  baseUrl: 'https://api.example.com',
+  headers: { authorization: `Bearer ${token}` },
+});
+```
+
+#### `generateKeysRemote()`
+
+Calls `POST /api/v1/keys/generate` and maps the response into
+`{ keys, metaAddress }`. Secret fields are still redacted in JSON/inspect, but
+remote key generation means the server sees the generated secret keys. Prefer
+`generateSpecterKeys()` for wallets unless you have a strong operational reason.
+
+#### `createStealthPaymentRemote(metaAddress)`
+
+Calls `POST /api/v1/stealth/create` with `{ meta_address }`. The returned
+`paymentId` is the server-authoritative handle that binds the announcement and
+view-tag to this payment.
+
+```ts
+const payment = await api.createStealthPaymentRemote(meta.hex);
+// payment: { paymentId, ethAddress, suiAddress, ephemeralCiphertext, viewTag, announcement? }
+```
+
+#### `publishAnnouncement(input)`
+
+Calls `POST /api/v1/registry/announcements`. Prefer the `paymentId` path so the
+server publishes its stored announcement instead of trusting client-supplied
+view-tags.
+
+```ts
+await api.publishAnnouncement({
+  paymentId: payment.paymentId,
+  txHash: '0x...',
+  chain: 'ethereum',
+});
+```
+
+#### `scanRemote(input)`
+
+Calls `POST /api/v1/stealth/scan` and validates discovery DTOs. Remote scanning
+may send `viewingSk` and other sensitive material to your backend; local
+`scanAnnouncement` / `scanAnnouncements` remains the safer default.
+
+```ts
+const remoteScan = await api.scanRemote({
+  announcements,
+  viewingSk: recipient.viewing.secretKey,
+  spendingPk: recipient.spending.publicKey,
+});
+```
+
+---
+
 ### Constants
 
 Use constants for runtime checks and schema alignment:
@@ -418,6 +485,8 @@ Typical error codes:
 - `INVALID_META_ADDRESS`
 - `INVALID_METADATA_JSON`
 - `INVALID_VIEW_TAG`
+- `INVALID_API_RESPONSE`
+- `HTTP_ERROR`
 - `ENCAPSULATION_FAILED`
 - `DECAPSULATION_FAILED`
 - `STEALTH_DERIVATION_FAILED`
@@ -443,7 +512,11 @@ Typical error codes:
   - redacted in JSON serialization
   - redacted in Node inspect/logging hooks
 - Inputs are validated and outputs are length-checked.
-- Intended to be offline-by-construction in runtime behavior.
+- Local crypto helpers are offline-by-default. Network calls only happen through
+  `createSpecterApiClient`.
+- `generateKeysRemote` and `scanRemote` can expose secret material to your
+  backend. Use them only with a trusted API, TLS, and an application-level
+  authorization boundary.
 
 Full policy: `SECURITY.md` in repo root.
 
@@ -464,6 +537,13 @@ Full policy: `SECURITY.md` in repo root.
 3. Use `ethAddress`/`suiAddress` as destination
 4. Publish announcement (`ephemeralCiphertext`, `viewTag`) to your transport
 
+### Pattern B2: Server-authoritative sender flow
+
+1. Create an API client with a trusted base URL
+2. Call `createStealthPaymentRemote(metaHex)`
+3. Send funds to the returned stealth address
+4. Call `publishAnnouncement({ paymentId, txHash, chain })`
+
 ### Pattern C: Recipient scanner
 
 1. Pull announcements from your transport
@@ -474,10 +554,10 @@ Full policy: `SECURITY.md` in repo root.
 
 ## What this package does not do
 
-- It does not broadcast announcements for you.
 - It does not sign transactions for you.
 - It does not provide chain indexers or RPC abstraction.
 - It does not resolve ENS/SuiNS/IPFS by itself.
+- It does not make network calls unless you explicitly use `createSpecterApiClient`.
 
 ---
 
