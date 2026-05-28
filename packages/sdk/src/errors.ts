@@ -17,6 +17,8 @@ export type SpecterErrorCode =
   | 'INVALID_META_ADDRESS'
   | 'INVALID_METADATA_JSON'
   | 'INVALID_VIEW_TAG'
+  | 'INVALID_API_RESPONSE'
+  | 'HTTP_ERROR'
   | 'ENCAPSULATION_FAILED'
   | 'DECAPSULATION_FAILED'
   | 'STEALTH_DERIVATION_FAILED'
@@ -74,7 +76,10 @@ function categoryFor(code: SpecterErrorCode): SpecterErrorCategory {
     case 'INVALID_META_ADDRESS':
     case 'INVALID_METADATA_JSON':
     case 'INVALID_VIEW_TAG':
+    case 'INVALID_API_RESPONSE':
       return 'validation';
+    case 'HTTP_ERROR':
+      return 'internal';
     case 'INVALID_HEX':
       return 'encoding';
     case 'ENCAPSULATION_FAILED':
@@ -97,6 +102,8 @@ const KNOWN_CODES = new Set<SpecterErrorCode>([
   'INVALID_META_ADDRESS',
   'INVALID_METADATA_JSON',
   'INVALID_VIEW_TAG',
+  'INVALID_API_RESPONSE',
+  'HTTP_ERROR',
   'ENCAPSULATION_FAILED',
   'DECAPSULATION_FAILED',
   'STEALTH_DERIVATION_FAILED',

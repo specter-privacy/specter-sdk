@@ -190,7 +190,8 @@ The `release.yml` workflow uses Changesets + npm provenance and publishes `@spec
 ## 8) Security checks before merge
 
 - No secret values logged (`secretKey`, `sharedSecret`, `ethPrivateKey`).
-- No network calls introduced in SDK runtime path.
+- No implicit network calls in local crypto helpers; all API traffic must stay inside `createSpecterApiClient`.
+- Remote keygen/scan helpers are trusted-backend features and must preserve redaction + validation.
 - Validate all new byte/hex inputs and output lengths.
 - Preserve redaction behavior for secret-bearing fields.
 - Keep bridge Rust crate free of `unsafe`.

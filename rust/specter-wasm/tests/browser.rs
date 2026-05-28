@@ -216,7 +216,7 @@ fn full_payment_flow_in_browser() {
     let bundle: WireSpecter = from_value(generate_specter_keys().unwrap());
 
     // Sender.
-    let encap: WireEncap = from_value(encapsulate_js(&bundle.spending.public_key).unwrap());
+    let encap: WireEncap = from_value(encapsulate_js(&bundle.viewing.public_key).unwrap());
     let sender_view_tag = compute_view_tag_js(&encap.shared_secret).unwrap();
     let sender_eth_addr =
         derive_stealth_address_js(&bundle.spending.public_key, &encap.shared_secret).unwrap();
@@ -225,7 +225,7 @@ fn full_payment_flow_in_browser() {
 
     // Recipient.
     let decap: WireDecap =
-        from_value(decapsulate_js(&encap.ciphertext, &bundle.spending.secret_key).unwrap());
+        from_value(decapsulate_js(&encap.ciphertext, &bundle.viewing.secret_key).unwrap());
     assert_eq!(decap.shared_secret, encap.shared_secret);
 
     let receiver_view_tag = compute_view_tag_js(&decap.shared_secret).unwrap();
@@ -251,11 +251,11 @@ fn wrong_secret_key_decap_does_not_match_view_tag() {
     let alice: WireSpecter = from_value(generate_specter_keys().unwrap());
     let bob: WireSpecter = from_value(generate_specter_keys().unwrap());
 
-    let encap_to_alice: WireEncap = from_value(encapsulate_js(&alice.spending.public_key).unwrap());
+    let encap_to_alice: WireEncap = from_value(encapsulate_js(&alice.viewing.public_key).unwrap());
     let alice_tag = compute_view_tag_js(&encap_to_alice.shared_secret).unwrap();
 
     let bob_decap: WireDecap =
-        from_value(decapsulate_js(&encap_to_alice.ciphertext, &bob.spending.secret_key).unwrap());
+        from_value(decapsulate_js(&encap_to_alice.ciphertext, &bob.viewing.secret_key).unwrap());
     let bob_tag = compute_view_tag_js(&bob_decap.shared_secret).unwrap();
 
     // We can only assert the *secrets* differ deterministically; the tags

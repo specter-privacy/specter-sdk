@@ -114,6 +114,77 @@ export interface StealthPayment extends StealthAddresses {
   readonly viewTag: number;
 }
 
+/** API-backed key generation response mapped into SDK-safe camelCase fields. */
+export interface RemoteGeneratedKeys {
+  /** Spending + viewing keypairs returned by the trusted SPECTER API. */
+  readonly keys: SpecterKeys;
+  /** Canonical 2369-byte meta-address from the API. */
+  readonly metaAddress: MetaAddressHex;
+}
+
+/** Announcement DTO returned by the SPECTER API. */
+export interface AnnouncementDto {
+  readonly id?: number;
+  readonly ephemeralCiphertext: KyberCiphertextHex;
+  readonly viewTag: number;
+  readonly timestamp?: number;
+  readonly channelId?: Hex<'ChannelId'>;
+  readonly blockNumber?: number;
+  readonly txHash?: string;
+  readonly amount?: string;
+  readonly chain?: string;
+}
+
+/** API-backed payment creation response. */
+export interface RemoteStealthPayment extends StealthPayment {
+  /** Server-side pending payment identifier used for authoritative publish. */
+  readonly paymentId: string;
+  /** Full announcement backup returned by the API, when available. */
+  readonly announcement?: AnnouncementDto;
+}
+
+/** Input for the server-authoritative registry publish path. */
+export interface PublishAnnouncementInput {
+  readonly paymentId: string;
+  readonly txHash?: string;
+  readonly blockNumber?: number;
+  readonly amount?: string;
+  readonly chain?: string;
+}
+
+/** Registry publish response from the SPECTER API. */
+export interface PublishAnnouncementResponse {
+  readonly announcementId?: number;
+  readonly announcement?: AnnouncementDto;
+}
+
+/** Request body for trusted remote scanning. Prefer local scanning when possible. */
+export interface RemoteScanRequest {
+  readonly announcements?: readonly AnnouncementInput[];
+  readonly viewingSk?: KyberSecretKeyHex;
+  readonly spendingPk?: KyberPublicKeyHex;
+  readonly spendingSk?: KyberSecretKeyHex;
+  readonly viewTags?: readonly number[];
+  readonly fromTimestamp?: number;
+  readonly toTimestamp?: number;
+}
+
+/** Discovery DTO returned by the SPECTER API scan endpoint. */
+export interface RemoteDiscovery {
+  readonly ethAddress?: EthAddressHex;
+  readonly suiAddress?: SuiAddressHex;
+  readonly ethPrivateKey: StealthEthPrivateHex;
+  readonly stealthSk: StealthEthPrivateHex;
+  readonly announcementId?: number;
+  readonly paymentId?: string;
+  readonly timestamp?: number;
+}
+
+/** Remote scan response from the SPECTER API. */
+export interface RemoteScanResponse {
+  readonly discoveries: readonly RemoteDiscovery[];
+}
+
 /** Single announcement input shape used by `scanAnnouncement`. */
 export interface AnnouncementInput {
   /** Ephemeral ML-KEM-768 ciphertext (1088 bytes). */

@@ -1,6 +1,6 @@
 # @specterpq/sdk
 
-Browser-first SDK for the [SPECTER](https://specterpq.com) post-quantum stealth address protocol. Generates ML-KEM-768 keys, builds meta-addresses, encapsulates and decapsulates ephemeral secrets, computes view-tags, and derives stealth Ethereum + Sui addresses **entirely in the user's browser** via Rust compiled to WebAssembly. No secret keys ever leave the device.
+Browser-first SDK for the [SPECTER](https://specterpq.com) post-quantum stealth address protocol. Generates ML-KEM-768 keys, builds meta-addresses, encapsulates and decapsulates ephemeral secrets, computes per-payment view-tags, and derives stealth Ethereum + Sui addresses **entirely in the user's browser** via Rust compiled to WebAssembly. No secret keys leave the device unless you explicitly opt into the trusted HTTP API helpers.
 
 ## Status
 
@@ -14,7 +14,8 @@ SPECTER gives wallets and apps a practical way to move from "one public address 
 - **Secure key generation**: recipient spending/viewing keys are generated locally inside the WASM crypto layer; no backend round-trip is required.
 - **Flow in one line**: recipient publishes a meta-address -> sender encapsulates to viewing key and derives stealth destinations -> recipient scans announcements and recovers spendable stealth keys only for matches.
 - **Why this is safer than static addresses**: each payment can target a unique stealth address, making trivial address reuse tracking much harder.
-- **Defense-in-depth in SDK design**: strict input/output length checks, typed errors, redaction of secret-bearing fields in JSON/inspect/logging paths, and offline-by-construction behavior.
+- **Defense-in-depth in SDK design**: strict input/output length checks, typed errors, redaction of secret-bearing fields in JSON/inspect/logging paths, and offline-by-default behavior.
+- **Server flow support**: an opt-in HTTP client covers `payment_id`-bound API flows while keeping network behavior separate from local crypto helpers.
 - **Supply-chain confidence**: vendored Rust crates are pinned to an upstream SHA, verified in CI, and npm releases are configured with provenance.
 
 In short, this SDK is built for teams that want strong cryptographic privacy defaults without building custom crypto infrastructure.
@@ -23,13 +24,13 @@ In short, this SDK is built for teams that want strong cryptographic privacy def
 
 - A wasm-bindgen wrapper over [`pranshurastogi/SPECTER`](https://github.com/pranshurastogi/SPECTER)'s `specter-core` and `specter-crypto` crates. Vendored sources live in `vendor/` pinned to a specific upstream SHA recorded in `vendor/VENDORED_AT.json`.
 - A strict TypeScript layer with branded `Hex` types, runtime validation via [Zod](https://zod.dev), redacted serialization for secret-bearing fields, and exhaustive contract tests against the protocol constants (`KYBER_PUBLIC_KEY_SIZE = 1184`, etc.).
-- Offline-by-construction. No network calls, no telemetry, no remote code loading. See [`SECURITY.md`](./SECURITY.md).
+- Offline-by-default. The crypto helpers make no network calls, load no remote code, and emit no telemetry. The separate HTTP client only runs when you create it with a trusted API `baseUrl`. See [`SECURITY.md`](./SECURITY.md).
 
 ## What this SDK is NOT
 
 - It is **not** a transaction signer. Pass `ethPrivateKey` to `viem` / `ethers` / `@mysten/sui` to sign.
 - It does **not** resolve ENS / SuiNS or fetch IPFS content. Wire those to your backend or do them yourself.
-- It does **not** publish or scan announcements over the wire. The SDK gives you the cryptographic primitives; transport is yours.
+- It does **not** sign or broadcast transactions. It can call a trusted SPECTER API for payment creation, registry publish, and remote scan, but transaction submission remains yours.
 
 ## Public API (top-level, semver-stable)
 
@@ -48,6 +49,7 @@ import {
   deriveStealthSuiAddress,
   deriveStealthKeys,
   createStealthPayment,
+  createSpecterApiClient,
   scanAnnouncement,
   SpecterSdkError,
   KYBER_PUBLIC_KEY_SIZE,
@@ -80,6 +82,15 @@ const result = scanAnnouncement(
 if (result.isMatch) {
   // result.stealthKeys.ethPrivateKey is the spendable secp256k1 key for result.stealthKeys.ethAddress
 }
+
+// Optional trusted API flow: server creates and later publishes the authoritative announcement.
+const api = createSpecterApiClient({ baseUrl: 'https://api.example.com' });
+const remotePayment = await api.createStealthPaymentRemote(meta.hex);
+await api.publishAnnouncement({
+  paymentId: remotePayment.paymentId,
+  txHash: '0x...',
+  chain: 'ethereum',
+});
 ```
 
 See [`packages/sdk/README.md`](./packages/sdk/README.md) for the full reference.

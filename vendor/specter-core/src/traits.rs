@@ -91,10 +91,15 @@ pub trait Scanner: Send + Sync {
         progress: ProgressCallback,
     ) -> Result<Vec<DiscoveredAddress>>;
 
-    /// Computes the view tag for the given viewing public key.
+    /// Computes the per-payment view tag from a Kyber shared secret.
     ///
-    /// This is used to filter announcements efficiently.
-    fn compute_view_tag(&self, viewing_pk: &[u8]) -> u8;
+    /// The protocol view tag is `SHAKE256(DOMAIN_VIEW_TAG || shared_secret)[0]`,
+    /// where `shared_secret` is the 32-byte output of ML-KEM encapsulation /
+    /// decapsulation. A view tag is **per announcement**, not per wallet.
+    ///
+    /// The default implementation delegates to the canonical helper in
+    /// `specter-crypto`; override only if you need an alternative tagging scheme.
+    fn compute_view_tag_for_shared_secret(&self, shared_secret: &[u8]) -> u8;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
