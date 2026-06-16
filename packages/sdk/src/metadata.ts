@@ -45,7 +45,6 @@ import {
 } from './validation.js';
 
 import type {
-  AmountHex,
   AnnouncementMetadata,
   AnnouncementMetadataInput,
   EncryptedMetadataHex,
@@ -69,7 +68,7 @@ export interface EncodeMetadataInput extends AnnouncementMetadataInput {
 }
 
 /** Convert a uint256 amount (bytes / hex / bigint) into a 32-byte big-endian buffer. */
-function amountToBytes(amount: AmountHex | Uint8Array | bigint): Uint8Array {
+function amountToBytes(amount: `0x${string}` | Uint8Array | bigint): Uint8Array {
   if (typeof amount === 'bigint') {
     if (amount < 0n || amount > MAX_UINT256) {
       throw new SpecterSdkError(

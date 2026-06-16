@@ -30,7 +30,7 @@ function secret(byte = 0x42): Uint8Array {
   return new Uint8Array(32).fill(byte);
 }
 
-const TX_HASH = `0x${'11'.repeat(32)}`;
+const TX_HASH: `0x${string}` = `0x${'11'.repeat(32)}`;
 
 describe('announcement metadata: encode/decode', () => {
   it('encodes to exactly 77 bytes with the view tag in the clear at byte 0', () => {

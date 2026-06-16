@@ -220,10 +220,13 @@ export interface AnnouncementMetadata {
  *   32-byte big-endian uint256).
  */
 export interface AnnouncementMetadataInput {
-  /** Source-chain transaction hash (32 bytes). */
-  readonly txHash?: TxHashHex | Uint8Array;
-  /** Payment amount as a 32-byte uint256, or a non-negative bigint. */
-  readonly amount?: AmountHex | Uint8Array | bigint;
+  /** Source-chain transaction hash: a 32-byte `0x` hex string or `Uint8Array`. */
+  readonly txHash?: `0x${string}` | Uint8Array;
+  /**
+   * Payment amount: a 32-byte uint256 as a `0x` hex string / `Uint8Array`, or a
+   * non-negative `bigint`.
+   */
+  readonly amount?: `0x${string}` | Uint8Array | bigint;
   /** EIP-155 source chain id (non-negative safe integer). */
   readonly sourceChainId?: number;
 }
