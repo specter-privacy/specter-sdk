@@ -13,12 +13,14 @@
  */
 
 import {
+  ENCRYPTED_METADATA_SIZE,
   ETH_ADDRESS_SIZE,
   KYBER_CIPHERTEXT_SIZE,
   KYBER_PUBLIC_KEY_SIZE,
   KYBER_SECRET_KEY_SIZE,
   KYBER_SHARED_SECRET_SIZE,
   META_ADDRESS_SIZE,
+  PLAINTEXT_METADATA_SIZE,
   STEALTH_ETH_PRIVATE_KEY_SIZE,
   STEALTH_SECP256K1_PUBLIC_SIZE,
   SUI_ADDRESS_SIZE,
@@ -33,6 +35,7 @@ import {
   KyberSecretKeyInput,
   MetaAddressBytesInput,
   MetaAddressMetadataInput,
+  MetadataPlaintextInput,
   parseHexOrBytes,
   SharedSecretInput,
   ViewTagInput,
@@ -43,6 +46,7 @@ import {
 
 import type {
   EncapsulationResult,
+  EncryptedMetadataHex,
   EthAddressHex,
   KyberCiphertextHex,
   KyberKeyPair,
@@ -52,6 +56,7 @@ import type {
   MetaAddressBundle,
   MetaAddressHex,
   MetaAddressMetadata,
+  MetadataPlaintextHex,
   SharedSecretHex,
   SpecterKeys,
   StealthEthPrivateHex,
@@ -452,4 +457,71 @@ function wireMetaToBundle(wire: WireMetaAddress): MetaAddressBundle {
     bytes: metaBytes,
     hex: bytesToHex<'MetaAddress'>(metaBytes),
   };
+}
+
+/* ----------------------- Announcement metadata ----------------------- */
+
+/**
+ * Encrypt a 77-byte plaintext metadata block with AES-256-GCM, keyed from the
+ * ML-KEM shared secret. Returns the 93-byte encrypted block as hex.
+ *
+ * This is the low-level primitive; most callers should use
+ * `sealAnnouncementMetadata`, which builds the plaintext for you and derives
+ * the correct view-tag from the shared secret.
+ */
+export function encryptAnnouncementMetadata(
+  plaintext: MetadataPlaintextHex | Uint8Array,
+  sharedSecret: SharedSecretHex | Uint8Array,
+): EncryptedMetadataHex {
+  const wasm = getWasmSync();
+  const ptBytes = parseHexOrBytes(
+    MetadataPlaintextInput,
+    plaintext,
+    'metadata_plaintext',
+    PLAINTEXT_METADATA_SIZE,
+  );
+  const ssBytes = parseHexOrBytes(
+    SharedSecretInput,
+    sharedSecret,
+    'shared_secret',
+    KYBER_SHARED_SECRET_SIZE,
+  );
+  const out = bridgeCall<ByteArrayWire>(
+    () => wasm.encryptAnnouncementMetadata(ptBytes, ssBytes) as ByteArrayWire,
+  );
+  const encBytes = expectByteLength(toBytes(out), ENCRYPTED_METADATA_SIZE, 'encrypted_metadata');
+  return bytesToHex<'EncryptedMetadata'>(encBytes);
+}
+
+/**
+ * Decrypt a 93-byte (or longer) encrypted metadata block, returning the
+ * recovered 77-byte plaintext. Throws `METADATA_DECRYPTION_FAILED` when the
+ * authentication tag does not verify — the expected outcome for ~255/256
+ * non-matching announcements.
+ *
+ * This is the low-level primitive; most callers should use
+ * `openAnnouncementMetadata`, which also decodes the structured fields.
+ */
+export function decryptAnnouncementMetadata(
+  encrypted: EncryptedMetadataHex | Uint8Array,
+  sharedSecret: SharedSecretHex | Uint8Array,
+): Uint8Array {
+  const wasm = getWasmSync();
+  const encBytes = asBytes(encrypted, { field: 'encrypted_metadata' });
+  if (encBytes.length < ENCRYPTED_METADATA_SIZE) {
+    throw new SpecterSdkError(
+      'INVALID_METADATA_SIZE',
+      `encrypted_metadata: expected at least ${ENCRYPTED_METADATA_SIZE} bytes, got ${encBytes.length}`,
+    );
+  }
+  const ssBytes = parseHexOrBytes(
+    SharedSecretInput,
+    sharedSecret,
+    'shared_secret',
+    KYBER_SHARED_SECRET_SIZE,
+  );
+  const out = bridgeCall<ByteArrayWire>(
+    () => wasm.decryptAnnouncementMetadata(encBytes, ssBytes) as ByteArrayWire,
+  );
+  return expectByteLength(toBytes(out), PLAINTEXT_METADATA_SIZE, 'metadata_plaintext');
 }

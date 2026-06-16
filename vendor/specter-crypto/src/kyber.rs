@@ -527,4 +527,102 @@ mod tests {
         // Should produce a different (pseudo-random) secret, not the original
         assert_ne!(sender_secret, wrong_secret);
     }
+
+    #[test]
+    fn shared_secret_is_32_bytes() {
+        let keypair = generate_keypair();
+        let (ct, sender_ss) = encapsulate(&keypair.public).unwrap();
+        let receiver_ss = decapsulate(&ct, &keypair.secret).unwrap();
+        assert_eq!(sender_ss.len(), KYBER_SHARED_SECRET_SIZE);
+        assert_eq!(receiver_ss.len(), KYBER_SHARED_SECRET_SIZE);
+    }
+
+    #[test]
+    fn ciphertext_is_exactly_1088_bytes() {
+        let keypair = generate_keypair();
+        let (ct, _) = encapsulate(&keypair.public).unwrap();
+        assert_eq!(ct.as_bytes().len(), KYBER_CIPHERTEXT_SIZE);
+        assert_eq!(KYBER_CIPHERTEXT_SIZE, 1088);
+    }
+
+    #[test]
+    fn generate_keypair_produces_distinct_keys_each_call() {
+        let kp1 = generate_keypair();
+        let kp2 = generate_keypair();
+        assert_ne!(kp1.public.as_bytes(), kp2.public.as_bytes());
+        assert_ne!(kp1.secret.as_bytes(), kp2.secret.as_bytes());
+    }
+
+    #[test]
+    fn ciphertext_from_bytes_too_large_is_err() {
+        let bad = KyberCiphertext::from_bytes(&[0u8; KYBER_CIPHERTEXT_SIZE + 1]);
+        assert!(bad.is_err());
+    }
+
+    #[test]
+    fn ciphertext_from_bytes_correct_size_is_ok() {
+        let ok = KyberCiphertext::from_bytes(&[0u8; KYBER_CIPHERTEXT_SIZE]);
+        assert!(ok.is_ok());
+    }
+
+    #[test]
+    fn ciphertext_from_bytes_zero_size_is_err() {
+        let bad = KyberCiphertext::from_bytes(&[]);
+        assert!(bad.is_err());
+    }
+
+    #[test]
+    fn ciphertext_from_hex_invalid_hex_is_err() {
+        let bad = KyberCiphertext::from_hex("not_valid_hex!!!");
+        assert!(bad.is_err());
+    }
+
+    #[test]
+    fn ciphertext_from_hex_wrong_length_is_err() {
+        let short_hex = "deadbeef"; // 4 bytes, not 1088
+        let bad = KyberCiphertext::from_hex(short_hex);
+        assert!(bad.is_err());
+    }
+
+    #[test]
+    fn ciphertext_into_bytes_matches_as_bytes() {
+        let keypair = generate_keypair();
+        let (ct, _) = encapsulate(&keypair.public).unwrap();
+        let bytes_ref = ct.as_bytes().to_vec();
+        let bytes_owned = ct.into_bytes();
+        assert_eq!(bytes_ref, bytes_owned);
+    }
+
+    #[test]
+    fn ciphertext_debug_does_not_panic() {
+        let ct = KyberCiphertext::from_bytes(&[0xabu8; KYBER_CIPHERTEXT_SIZE]).unwrap();
+        let debug = format!("{:?}", ct);
+        assert!(debug.contains("KyberCiphertext"));
+    }
+
+    #[test]
+    fn verify_roundtrip_mismatched_keys_returns_false() {
+        let kp1 = generate_keypair();
+        let kp2 = generate_keypair();
+        // Encapsulate with kp1 public, decapsulate with kp2 secret — should mismatch
+        let result = verify_roundtrip(&kp1.public, &kp2.secret).unwrap();
+        assert!(!result, "mismatched key pair should not verify");
+    }
+
+    #[test]
+    fn encapsulate_produces_non_zero_ciphertext() {
+        let keypair = generate_keypair();
+        let (ct, _) = encapsulate(&keypair.public).unwrap();
+        // An all-zero ciphertext would indicate a broken RNG — extremely unlikely
+        let all_zero = ct.as_bytes().iter().all(|&b| b == 0);
+        assert!(!all_zero, "ciphertext should not be all zeros");
+    }
+
+    #[test]
+    fn encapsulate_produces_non_zero_shared_secret() {
+        let keypair = generate_keypair();
+        let (_, ss) = encapsulate(&keypair.public).unwrap();
+        let all_zero = ss.iter().all(|&b| b == 0);
+        assert!(!all_zero, "shared secret should not be all zeros");
+    }
 }

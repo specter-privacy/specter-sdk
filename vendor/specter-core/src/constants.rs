@@ -74,6 +74,23 @@ pub const DOMAIN_ETH_ADDRESS: &[u8] = b"SPECTER_ETH_ADDRESS_V1";
 /// Domain separator for Ethereum secp256k1 key derivation (stealth address = eth address).
 pub const DOMAIN_ETH_KEY: &[u8] = b"SPECTER_ETH_KEY_V1";
 
+/// Domain separator for metadata encryption key derivation (AES-256-GCM key).
+pub const DOMAIN_META_ENC_KEY: &[u8] = b"SPECTER_META_ENC_KEY_V1";
+
+/// Domain separator for metadata encryption nonce derivation (AES-256-GCM nonce).
+pub const DOMAIN_META_ENC_NONCE: &[u8] = b"SPECTER_META_ENC_NONCE_V1";
+
+/// Domain separator: derive the dedup-MAC subkey from the DB master key.
+pub const DOMAIN_DB_HMAC_KEY: &[u8] = b"SPECTER_DB_HMAC_V1";
+/// Domain separator: derive the pending-secret AEAD-wrap subkey.
+pub const DOMAIN_DB_PENDING_WRAP: &[u8] = b"SPECTER_DB_PENDING_V1";
+/// Domain separator: derive the telemetry IP-hash salt from the DB master key.
+pub const DOMAIN_DB_TELEMETRY_SALT: &[u8] = b"SPECTER_DB_TELEMETRY_V1";
+/// Domain separator: keyed MAC over a normalized payment tx hash (dedup key).
+pub const DOMAIN_DB_PAYMENT_MAC: &[u8] = b"SPECTER_DB_PAYMENT_MAC_V1";
+/// Domain separator: telemetry IP hash (salt + day + ip).
+pub const DOMAIN_DB_IP_HASH: &[u8] = b"SPECTER_DB_IP_HASH_V1";
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // PROTOCOL VERSIONING
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -193,8 +210,14 @@ mod tests {
             DOMAIN_SPENDING_SEED,
             DOMAIN_ETH_ADDRESS,
             DOMAIN_ETH_KEY,
+            DOMAIN_META_ENC_KEY,
+            DOMAIN_META_ENC_NONCE,
+            DOMAIN_DB_HMAC_KEY,
+            DOMAIN_DB_PENDING_WRAP,
+            DOMAIN_DB_TELEMETRY_SALT,
+            DOMAIN_DB_PAYMENT_MAC,
+            DOMAIN_DB_IP_HASH,
         ];
-
         for (i, a) in domains.iter().enumerate() {
             for (j, b) in domains.iter().enumerate() {
                 if i != j {

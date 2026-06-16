@@ -24,11 +24,13 @@
 
 pub mod constants;
 pub mod error;
+pub mod resolver;
 pub mod traits;
 pub mod types;
 
 // Re-export commonly used items at crate root
 pub use constants::*;
 pub use error::{Result, SpecterError};
+pub use resolver::EphemeralKeyResolver;
 pub use traits::*;
 pub use types::*;

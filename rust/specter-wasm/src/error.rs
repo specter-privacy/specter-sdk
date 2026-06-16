@@ -66,6 +66,17 @@ pub enum WasmError {
         actual: usize,
     },
 
+    /// An announcement-metadata buffer did not match the expected fixed length.
+    #[error("invalid metadata size: expected {expected} bytes, got {actual}")]
+    InvalidMetadataSize {
+        /// Expected length in bytes.
+        expected: usize,
+        /// Actual length supplied by the caller.
+        actual: usize,
+        /// Which logical field (`plaintext` or `encrypted`).
+        field: &'static str,
+    },
+
     /// Hex string failed to decode.
     #[error("invalid hex encoding")]
     InvalidHex,
@@ -86,6 +97,12 @@ pub enum WasmError {
     #[error("stealth derivation failed: {0}")]
     StealthDerivationFailed(String),
 
+    /// AES-256-GCM authentication failed when decrypting announcement
+    /// metadata. This is the expected outcome for ~255/256 scan attempts
+    /// (wrong recipient or tampered ciphertext), not a programmer error.
+    #[error("metadata decryption failed: {0}")]
+    MetadataDecryptionFailed(String),
+
     /// Optional metadata JSON was present but failed to parse.
     #[error("invalid metadata JSON: {0}")]
     InvalidMetadataJson(String),
@@ -103,11 +120,13 @@ impl WasmError {
             Self::InvalidKeySize { .. } => "INVALID_KEY_SIZE",
             Self::InvalidCiphertextSize { .. } => "INVALID_CIPHERTEXT_SIZE",
             Self::InvalidSharedSecretSize { .. } => "INVALID_SHARED_SECRET_SIZE",
+            Self::InvalidMetadataSize { .. } => "INVALID_METADATA_SIZE",
             Self::InvalidHex => "INVALID_HEX",
             Self::InvalidMetaAddress(_) => "INVALID_META_ADDRESS",
             Self::EncapsulationFailed(_) => "ENCAPSULATION_FAILED",
             Self::DecapsulationFailed(_) => "DECAPSULATION_FAILED",
             Self::StealthDerivationFailed(_) => "STEALTH_DERIVATION_FAILED",
+            Self::MetadataDecryptionFailed(_) => "METADATA_DECRYPTION_FAILED",
             Self::InvalidMetadataJson(_) => "INVALID_METADATA_JSON",
             Self::Internal(_) => "INTERNAL_ERROR",
         }
@@ -128,12 +147,14 @@ impl WasmError {
             Self::InvalidKeySize { .. }
             | Self::InvalidCiphertextSize { .. }
             | Self::InvalidSharedSecretSize { .. }
+            | Self::InvalidMetadataSize { .. }
             | Self::InvalidMetaAddress(_)
             | Self::InvalidMetadataJson(_) => ErrorCategory::Validation,
             Self::InvalidHex => ErrorCategory::Encoding,
             Self::EncapsulationFailed(_)
             | Self::DecapsulationFailed(_)
-            | Self::StealthDerivationFailed(_) => ErrorCategory::Crypto,
+            | Self::StealthDerivationFailed(_)
+            | Self::MetadataDecryptionFailed(_) => ErrorCategory::Crypto,
             Self::Internal(_) => ErrorCategory::Internal,
         }
     }
@@ -214,6 +235,19 @@ mod tests {
         assert_eq!(
             WasmError::DecapsulationFailed("x".into()).code(),
             "DECAPSULATION_FAILED"
+        );
+        assert_eq!(
+            WasmError::InvalidMetadataSize {
+                expected: 77,
+                actual: 0,
+                field: "plaintext"
+            }
+            .code(),
+            "INVALID_METADATA_SIZE"
+        );
+        assert_eq!(
+            WasmError::MetadataDecryptionFailed("x".into()).code(),
+            "METADATA_DECRYPTION_FAILED"
         );
     }
 

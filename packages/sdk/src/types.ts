@@ -30,6 +30,14 @@ export type StealthSecp256k1PublicHex = Hex<'StealthSecp256k1Public'>;
 export type StealthEthPrivateHex = Hex<'StealthEthPrivate'>;
 /** 2369-byte serialised meta-address. */
 export type MetaAddressHex = Hex<'MetaAddress'>;
+/** 93-byte encrypted announcement-metadata block. */
+export type EncryptedMetadataHex = Hex<'EncryptedMetadata'>;
+/** 77-byte plaintext announcement-metadata block. */
+export type MetadataPlaintextHex = Hex<'MetadataPlaintext'>;
+/** 32-byte source-chain transaction hash. */
+export type TxHashHex = Hex<'TxHash'>;
+/** 32-byte uint256 payment amount (big-endian). */
+export type AmountHex = Hex<'Amount'>;
 
 /** A SPECTER ML-KEM-768 keypair. The TS layer marks `secretKey` non-enumerable. */
 export interface KyberKeyPair {
@@ -183,6 +191,44 @@ export interface RemoteDiscovery {
 /** Remote scan response from the SPECTER API. */
 export interface RemoteScanResponse {
   readonly discoveries: readonly RemoteDiscovery[];
+}
+
+/**
+ * Decoded announcement metadata (the 77-byte on-chain block, parsed).
+ *
+ * Optional fields are `undefined` when the corresponding wire bytes are all
+ * zero (the upstream "absent" encoding).
+ */
+export interface AnnouncementMetadata {
+  /** 1-byte view tag (0..255). Byte 0 of the block; never encrypted. */
+  readonly viewTag: number;
+  /** 32-byte source-chain transaction hash, if present. */
+  readonly txHash?: TxHashHex;
+  /** 32-byte uint256 payment amount (big-endian hex), if present. */
+  readonly amount?: AmountHex;
+  /** EIP-155 source chain id (e.g. 42161 = Arbitrum), if present. */
+  readonly sourceChainId?: number;
+}
+
+/**
+ * Fields a sender can attach to an announcement. The `viewTag` is derived
+ * automatically from the shared secret by `sealAnnouncementMetadata`, so it
+ * is not part of this input.
+ *
+ * - `txHash` / `amount` accept a 32-byte `Uint8Array` or `0x` hex string.
+ * - `amount` additionally accepts a non-negative `bigint` (encoded as a
+ *   32-byte big-endian uint256).
+ */
+export interface AnnouncementMetadataInput {
+  /** Source-chain transaction hash: a 32-byte `0x` hex string or `Uint8Array`. */
+  readonly txHash?: `0x${string}` | Uint8Array;
+  /**
+   * Payment amount: a 32-byte uint256 as a `0x` hex string / `Uint8Array`, or a
+   * non-negative `bigint`.
+   */
+  readonly amount?: `0x${string}` | Uint8Array | bigint;
+  /** EIP-155 source chain id (non-negative safe integer). */
+  readonly sourceChainId?: number;
 }
 
 /** Single announcement input shape used by `scanAnnouncement`. */

@@ -19,6 +19,7 @@ use specter_wasm::error::WasmError;
 use specter_wasm::kem::{decapsulate_js, encapsulate_js};
 use specter_wasm::keys::{generate_keys, generate_specter_keys};
 use specter_wasm::meta_address::{meta_address_from_public_keys, parse_meta_address};
+use specter_wasm::metadata::{decrypt_announcement_metadata_js, encrypt_announcement_metadata_js};
 use specter_wasm::view_tag::{compute_view_tag_js, verify_view_tag_js};
 use wasm_bindgen::JsValue;
 use wasm_bindgen_test::*;
@@ -240,6 +241,42 @@ fn full_payment_flow_in_browser() {
     assert_eq!(stealth.sui_address.len(), 32);
     assert_eq!(stealth.public_key.len(), 65);
     assert_eq!(stealth.eth_private_key.len(), 32);
+}
+
+#[wasm_bindgen_test]
+fn announcement_metadata_round_trips_in_browser() {
+    // Exercise the AES-256-GCM metadata seal/open over a real ML-KEM shared
+    // secret in the wasm runtime (the AES path differs from native builds).
+    let bundle: WireSpecter = from_value(generate_specter_keys().unwrap());
+    let encap: WireEncap = from_value(encapsulate_js(&bundle.viewing.public_key).unwrap());
+    let tag = compute_view_tag_js(&encap.shared_secret).unwrap();
+
+    let mut plaintext = vec![0u8; 77];
+    plaintext[0] = tag; // view tag
+    plaintext[1..33].copy_from_slice(&[0x11u8; 32]); // tx_hash
+    plaintext[65..73].copy_from_slice(&42161u64.to_be_bytes()); // source chain id
+
+    let encrypted = encrypt_announcement_metadata_js(&plaintext, &encap.shared_secret).unwrap();
+    assert_eq!(encrypted.len(), 93);
+    assert_eq!(encrypted[0], tag, "view tag must stay in the clear");
+
+    let decrypted = decrypt_announcement_metadata_js(&encrypted, &encap.shared_secret).unwrap();
+    assert_eq!(decrypted, plaintext);
+}
+
+#[wasm_bindgen_test]
+fn announcement_metadata_wrong_secret_fails_auth() {
+    let alice: WireSpecter = from_value(generate_specter_keys().unwrap());
+    let bob: WireSpecter = from_value(generate_specter_keys().unwrap());
+
+    let encap: WireEncap = from_value(encapsulate_js(&alice.viewing.public_key).unwrap());
+    let mut plaintext = vec![0u8; 77];
+    plaintext[0] = compute_view_tag_js(&encap.shared_secret).unwrap();
+    let encrypted = encrypt_announcement_metadata_js(&plaintext, &encap.shared_secret).unwrap();
+
+    let bob_encap: WireEncap = from_value(encapsulate_js(&bob.viewing.public_key).unwrap());
+    let err = decrypt_announcement_metadata_js(&encrypted, &bob_encap.shared_secret).unwrap_err();
+    assert_eq!(err_code(err), "METADATA_DECRYPTION_FAILED");
 }
 
 #[wasm_bindgen_test]

@@ -8,6 +8,24 @@ use serde::{Deserialize, Serialize};
 use crate::constants::{KYBER_CIPHERTEXT_SIZE, VIEW_TAG_SIZE};
 use crate::error::{Result, SpecterError};
 
+/// serde adapter: `Option<Vec<u8>>` <-> `Option<hex string>`.
+mod opt_hex {
+    use serde::{Deserialize, Deserializer, Serializer};
+    pub fn serialize<S: Serializer>(v: &Option<Vec<u8>>, s: S) -> Result<S::Ok, S::Error> {
+        match v {
+            Some(bytes) => s.serialize_str(&hex::encode(bytes)),
+            None => s.serialize_none(),
+        }
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Vec<u8>>, D::Error> {
+        let opt = Option::<String>::deserialize(d)?;
+        match opt {
+            Some(s) => hex::decode(s).map(Some).map_err(serde::de::Error::custom),
+            None => Ok(None),
+        }
+    }
+}
+
 /// An announcement published to the registry.
 ///
 /// Senders create announcements containing their ephemeral key and view tag.
@@ -15,8 +33,10 @@ use crate::error::{Result, SpecterError};
 ///
 /// # Wire Format (binary)
 /// ```text
-/// ephemeral_key (1088) || view_tag (1) || timestamp (8) || [channel_id (32)]
+/// ephemeral_key (1088) || view_tag (1) || timestamp (8)
 /// ```
+/// Note: `source_chain_id` and other optional fields are encoded in the on-chain
+/// metadata bytes, not in this binary format.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Announcement {
     /// Unique identifier (assigned by registry)
@@ -24,25 +44,48 @@ pub struct Announcement {
     /// Kyber ciphertext - the encapsulated ephemeral key
     #[serde(with = "hex")]
     pub ephemeral_key: Vec<u8>,
+    /// keccak256(ciphertext) emitted by the new contract event. Present for
+    /// chain-indexed rows; the full `ephemeral_key` is fetched from calldata
+    /// on view-tag match and verified against this hash.
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "opt_hex")]
+    pub ephemeral_key_hash: Option<Vec<u8>>,
+    /// AEAD-encrypted on-chain metadata blob (opaque to the registry/indexer;
+    /// only the recipient with the shared secret can decrypt it).
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "opt_hex")]
+    pub metadata_blob: Option<Vec<u8>>,
+    /// HMAC(server_key, normalize(payment_tx_hash)) — the double-announce dedup key.
+    /// Write-only: never read back into an Announcement, only used by the UNIQUE
+    /// index. Never reveals the payment tx (only the API holding the key can compute it).
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "opt_hex")]
+    pub payment_tx_hash_hmac: Option<Vec<u8>>,
     /// View tag for efficient filtering (first byte of hash)
     pub view_tag: u8,
     /// Unix timestamp when announcement was created
     pub timestamp: u64,
-    /// Optional: Yellow channel ID for trading integration
+    /// EIP-155 chain ID of the chain where the payment originated.
+    /// Examples: 42161 = Arbitrum One, 10143 = Monad testnet, 1 = Ethereum mainnet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub channel_id: Option<[u8; 32]>,
-    /// Optional: Block number if stored on-chain
+    pub source_chain_id: Option<u64>,
+    /// Optional: Block number on Monad where the announcement was published
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub block_number: Option<u64>,
-    /// Optional: Transaction hash if stored on-chain
+    /// Monad announce tx hash — the tx that called SPECTERAnnouncer.announce().
+    /// Used as the dedup key in Turso (always unique, always present for on-chain announcements).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tx_hash: Option<String>,
-    /// Optional: Amount (human-readable, e.g. "0.1" ETH or "1.5" SUI)
+    /// Source-chain payment tx hash — the tx that transferred funds on `source_chain_id`.
+    /// Decoded from metadata bytes [1..33]. May be None if the sender omitted it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payment_tx_hash: Option<String>,
+    /// Optional: Payment amount (raw hex uint256, e.g. "0x0000...0de0b6b3a7640000" = 1 ETH in wei)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub amount: Option<String>,
-    /// Optional: Chain identifier (e.g. "ethereum", "sui")
+    /// Optional: Human-readable chain name (e.g. "monad-testnet", "arbitrum-one")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chain: Option<String>,
+    /// Optional: Stealth address for this payment (checksummed)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stealth_address: Option<String>,
 }
 
 impl Announcement {
@@ -51,34 +94,43 @@ impl Announcement {
         Self {
             id: 0, // Assigned by registry
             ephemeral_key,
+            ephemeral_key_hash: None,
+            metadata_blob: None,
+            payment_tx_hash_hmac: None,
             view_tag,
             timestamp: Self::current_timestamp(),
-            channel_id: None,
+            source_chain_id: None,
             block_number: None,
             tx_hash: None,
+            payment_tx_hash: None,
             amount: None,
             chain: None,
+            stealth_address: None,
         }
     }
 
-    /// Creates an announcement with a Yellow channel ID.
-    pub fn with_channel(ephemeral_key: Vec<u8>, view_tag: u8, channel_id: [u8; 32]) -> Self {
-        Self {
-            id: 0,
-            ephemeral_key,
-            view_tag,
-            timestamp: Self::current_timestamp(),
-            channel_id: Some(channel_id),
-            block_number: None,
-            tx_hash: None,
-            amount: None,
-            chain: None,
-        }
+    /// True once the full 1088-byte ciphertext is present (calldata fetched).
+    pub fn is_resolved(&self) -> bool {
+        self.ephemeral_key.len() == KYBER_CIPHERTEXT_SIZE
     }
 
     /// Validates the announcement structure.
     pub fn validate(&self) -> Result<()> {
-        // Check ephemeral key size
+        // A hash-only row (indexed from chain, ciphertext not yet fetched) is
+        // valid as long as the hash is a 32-byte keccak256 digest.
+        if self.ephemeral_key.is_empty() {
+            match &self.ephemeral_key_hash {
+                Some(h) if h.len() == 32 => return Ok(()),
+                _ => {
+                    return Err(SpecterError::InvalidAnnouncement(
+                        "announcement has neither ciphertext nor a 32-byte key hash".into(),
+                    ))
+                }
+            }
+        }
+
+        // Resolved row: full ciphertext must be exactly KYBER_CIPHERTEXT_SIZE
+        // and not all zeros.
         if self.ephemeral_key.len() != KYBER_CIPHERTEXT_SIZE {
             return Err(SpecterError::InvalidAnnouncement(format!(
                 "ephemeral key size mismatch: expected {}, got {}",
@@ -86,8 +138,6 @@ impl Announcement {
                 self.ephemeral_key.len()
             )));
         }
-
-        // Check for obviously invalid ephemeral key (all zeros)
         if self.ephemeral_key.iter().all(|&b| b == 0) {
             return Err(SpecterError::InvalidAnnouncement(
                 "ephemeral key is all zeros".into(),
@@ -106,26 +156,22 @@ impl Announcement {
     }
 
     /// Serializes to compact binary format.
+    ///
+    /// Format: `ephemeral_key (1088) || view_tag (1) || timestamp (8)`
+    /// Note: `source_chain_id` is not encoded here — it lives in the on-chain
+    /// metadata bytes and is populated when indexing from the chain.
     pub fn to_bytes(&self) -> Vec<u8> {
-        let has_channel = self.channel_id.is_some();
-        let size = KYBER_CIPHERTEXT_SIZE + VIEW_TAG_SIZE + 8 + 1 + if has_channel { 32 } else { 0 };
-
+        let size = KYBER_CIPHERTEXT_SIZE + VIEW_TAG_SIZE + 8;
         let mut bytes = Vec::with_capacity(size);
         bytes.extend_from_slice(&self.ephemeral_key);
         bytes.push(self.view_tag);
         bytes.extend_from_slice(&self.timestamp.to_le_bytes());
-        bytes.push(if has_channel { 1 } else { 0 });
-
-        if let Some(channel_id) = &self.channel_id {
-            bytes.extend_from_slice(channel_id);
-        }
-
         bytes
     }
 
     /// Deserializes from compact binary format.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        let min_size = KYBER_CIPHERTEXT_SIZE + VIEW_TAG_SIZE + 8 + 1;
+        let min_size = KYBER_CIPHERTEXT_SIZE + VIEW_TAG_SIZE + 8;
         if bytes.len() < min_size {
             return Err(SpecterError::InvalidAnnouncement(format!(
                 "too short: {} bytes, minimum {}",
@@ -144,30 +190,21 @@ impl Announcement {
                 .map_err(|_| SpecterError::InvalidAnnouncement("invalid timestamp".into()))?,
         );
 
-        let has_channel = bytes[timestamp_start + 8] == 1;
-        let channel_id = if has_channel {
-            if bytes.len() < min_size + 32 {
-                return Err(SpecterError::InvalidAnnouncement(
-                    "missing channel_id bytes".into(),
-                ));
-            }
-            let mut arr = [0u8; 32];
-            arr.copy_from_slice(&bytes[min_size..min_size + 32]);
-            Some(arr)
-        } else {
-            None
-        };
-
         let announcement = Self {
             id: 0, // ID is assigned by registry, not serialized
             ephemeral_key,
+            ephemeral_key_hash: None,
+            metadata_blob: None,
+            payment_tx_hash_hmac: None,
             view_tag,
             timestamp,
-            channel_id,
+            source_chain_id: None,
             block_number: None,
             tx_hash: None,
+            payment_tx_hash: None,
             amount: None,
             chain: None,
+            stealth_address: None,
         };
 
         announcement.validate()?;
@@ -187,13 +224,18 @@ impl Announcement {
 #[derive(Default)]
 pub struct AnnouncementBuilder {
     ephemeral_key: Option<Vec<u8>>,
+    ephemeral_key_hash: Option<Vec<u8>>,
+    metadata_blob: Option<Vec<u8>>,
+    payment_tx_hash_hmac: Option<Vec<u8>>,
     view_tag: Option<u8>,
     timestamp: Option<u64>,
-    channel_id: Option<[u8; 32]>,
+    source_chain_id: Option<u64>,
     block_number: Option<u64>,
     tx_hash: Option<String>,
+    payment_tx_hash: Option<String>,
     amount: Option<String>,
     chain: Option<String>,
+    stealth_address: Option<String>,
 }
 
 impl AnnouncementBuilder {
@@ -205,6 +247,24 @@ impl AnnouncementBuilder {
     /// Sets the ephemeral key (required).
     pub fn ephemeral_key(mut self, key: Vec<u8>) -> Self {
         self.ephemeral_key = Some(key);
+        self
+    }
+
+    /// Sets the keccak256 ephemeral key hash (chain-indexed rows).
+    pub fn ephemeral_key_hash(mut self, h: Vec<u8>) -> Self {
+        self.ephemeral_key_hash = Some(h);
+        self
+    }
+
+    /// Sets the encrypted on-chain metadata blob.
+    pub fn metadata_blob(mut self, b: Vec<u8>) -> Self {
+        self.metadata_blob = Some(b);
+        self
+    }
+
+    /// Sets the dedup HMAC (computed by the API from the payment tx hash).
+    pub fn payment_tx_hash_hmac(mut self, h: Vec<u8>) -> Self {
+        self.payment_tx_hash_hmac = Some(h);
         self
     }
 
@@ -221,8 +281,9 @@ impl AnnouncementBuilder {
     }
 
     /// Sets the Yellow channel ID (optional).
-    pub fn channel_id(mut self, id: [u8; 32]) -> Self {
-        self.channel_id = Some(id);
+    /// Sets the source chain ID (optional, EIP-155 chain ID).
+    pub fn source_chain_id(mut self, id: u64) -> Self {
+        self.source_chain_id = Some(id);
         self
     }
 
@@ -232,9 +293,15 @@ impl AnnouncementBuilder {
         self
     }
 
-    /// Sets the transaction hash (optional).
+    /// Sets the Monad announce tx hash (dedup key).
     pub fn tx_hash(mut self, hash: String) -> Self {
         self.tx_hash = Some(hash);
+        self
+    }
+
+    /// Sets the source-chain payment tx hash (from metadata bytes [1..33]).
+    pub fn payment_tx_hash(mut self, hash: impl Into<String>) -> Self {
+        self.payment_tx_hash = Some(hash.into());
         self
     }
 
@@ -247,6 +314,12 @@ impl AnnouncementBuilder {
     /// Sets the chain (optional, e.g. "ethereum", "sui").
     pub fn chain(mut self, chain: impl Into<String>) -> Self {
         self.chain = Some(chain.into());
+        self
+    }
+
+    /// Sets the stealth address (optional, for validation purposes).
+    pub fn stealth_address(mut self, addr: impl Into<String>) -> Self {
+        self.stealth_address = Some(addr.into());
         self
     }
 
@@ -265,11 +338,16 @@ impl AnnouncementBuilder {
         if let Some(ts) = self.timestamp {
             announcement.timestamp = ts;
         }
-        announcement.channel_id = self.channel_id;
+        announcement.source_chain_id = self.source_chain_id;
         announcement.block_number = self.block_number;
         announcement.tx_hash = self.tx_hash;
+        announcement.payment_tx_hash = self.payment_tx_hash;
         announcement.amount = self.amount;
         announcement.chain = self.chain;
+        announcement.stealth_address = self.stealth_address;
+        announcement.ephemeral_key_hash = self.ephemeral_key_hash;
+        announcement.metadata_blob = self.metadata_blob;
+        announcement.payment_tx_hash_hmac = self.payment_tx_hash_hmac;
 
         announcement.validate()?;
         Ok(announcement)
@@ -287,8 +365,6 @@ pub struct AnnouncementStats {
     pub earliest_timestamp: Option<u64>,
     /// Latest announcement timestamp
     pub latest_timestamp: Option<u64>,
-    /// Number of announcements with Yellow channel IDs
-    pub yellow_channel_count: u64,
 }
 
 impl Default for AnnouncementStats {
@@ -298,7 +374,6 @@ impl Default for AnnouncementStats {
             view_tag_distribution: vec![0; 256],
             earliest_timestamp: None,
             latest_timestamp: None,
-            yellow_channel_count: 0,
         }
     }
 }
@@ -333,10 +408,6 @@ impl AnnouncementStats {
             }
             _ => {}
         }
-
-        if announcement.channel_id.is_some() {
-            self.yellow_channel_count += 1;
-        }
     }
 }
 
@@ -353,21 +424,18 @@ mod tests {
         let ann = Announcement::new(make_valid_ephemeral_key(), 0x42);
         assert_eq!(ann.view_tag, 0x42);
         assert!(ann.timestamp > 0);
-        assert!(ann.channel_id.is_none());
+        assert!(ann.source_chain_id.is_none());
     }
 
     #[test]
     fn test_announcement_validation() {
-        // Valid announcement
         let valid = Announcement::new(make_valid_ephemeral_key(), 0x42);
         assert!(valid.validate().is_ok());
 
-        // Invalid: wrong ephemeral key size
         let mut invalid = valid.clone();
         invalid.ephemeral_key = vec![0u8; 100];
         assert!(invalid.validate().is_err());
 
-        // Invalid: all-zero ephemeral key
         let mut invalid2 = valid.clone();
         invalid2.ephemeral_key = vec![0u8; KYBER_CIPHERTEXT_SIZE];
         assert!(invalid2.validate().is_err());
@@ -385,14 +453,16 @@ mod tests {
     }
 
     #[test]
-    fn test_announcement_with_channel() {
-        let channel_id = [0xCC; 32];
-        let ann = Announcement::with_channel(make_valid_ephemeral_key(), 0x42, channel_id);
+    fn test_announcement_builder_with_source_chain_id() {
+        let ann = AnnouncementBuilder::new()
+            .ephemeral_key(make_valid_ephemeral_key())
+            .view_tag(0x55)
+            .source_chain_id(42161) // Arbitrum
+            .build()
+            .unwrap();
 
-        let bytes = ann.to_bytes();
-        let ann2 = Announcement::from_bytes(&bytes).unwrap();
-
-        assert_eq!(ann2.channel_id, Some(channel_id));
+        assert_eq!(ann.view_tag, 0x55);
+        assert_eq!(ann.source_chain_id, Some(42161));
     }
 
     #[test]
@@ -400,12 +470,11 @@ mod tests {
         let ann = AnnouncementBuilder::new()
             .ephemeral_key(make_valid_ephemeral_key())
             .view_tag(0x55)
-            .channel_id([0xAA; 32])
             .build()
             .unwrap();
 
         assert_eq!(ann.view_tag, 0x55);
-        assert!(ann.channel_id.is_some());
+        assert!(ann.source_chain_id.is_none());
     }
 
     #[test]
@@ -432,5 +501,136 @@ mod tests {
         assert_eq!(stats.total_count, 3);
         assert_eq!(stats.view_tag_distribution[0x42], 2);
         assert_eq!(stats.view_tag_distribution[0x00], 1);
+    }
+
+    #[test]
+    fn test_announcement_stealth_address_default_none() {
+        let ann = Announcement::new(make_valid_ephemeral_key(), 0x42);
+        assert!(ann.stealth_address.is_none());
+    }
+
+    #[test]
+    fn test_announcement_builder_with_stealth_address() {
+        let stealth_addr = "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef";
+        let ann = AnnouncementBuilder::new()
+            .ephemeral_key(make_valid_ephemeral_key())
+            .view_tag(0x42)
+            .stealth_address(stealth_addr)
+            .build()
+            .unwrap();
+
+        assert_eq!(ann.stealth_address, Some(stealth_addr.to_string()));
+        assert_eq!(ann.view_tag, 0x42);
+    }
+
+    #[test]
+    fn test_announcement_builder_stealth_address_chaining() {
+        let ann = AnnouncementBuilder::new()
+            .ephemeral_key(make_valid_ephemeral_key())
+            .view_tag(0xFF)
+            .amount("0x0000000000000000000000000000000000000000000000000de0b6b3a7640000")
+            .stealth_address("0xabcd")
+            .source_chain_id(10143)
+            .build()
+            .unwrap();
+
+        assert_eq!(ann.stealth_address, Some("0xabcd".to_string()));
+        assert!(ann.amount.is_some());
+        assert_eq!(ann.source_chain_id, Some(10143));
+    }
+
+    #[test]
+    fn test_announcement_stealth_address_serialization() {
+        let stealth_addr = "0x1234567890abcdef";
+        let ann = AnnouncementBuilder::new()
+            .ephemeral_key(make_valid_ephemeral_key())
+            .view_tag(0x42)
+            .stealth_address(stealth_addr)
+            .build()
+            .unwrap();
+
+        let json = serde_json::to_string(&ann).unwrap();
+        assert!(json.contains("stealth_address"));
+        assert!(json.contains("0x1234567890abcdef"));
+
+        let ann_deserialized: Announcement = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            ann_deserialized.stealth_address,
+            Some(stealth_addr.to_string())
+        );
+    }
+
+    #[test]
+    fn test_announcement_stealth_address_skipped_when_none() {
+        let ann = Announcement::new(make_valid_ephemeral_key(), 0x42);
+        let json = serde_json::to_string(&ann).unwrap();
+
+        // stealth_address should not be serialized when None due to skip_serializing_if
+        assert!(!json.contains("stealth_address"));
+    }
+
+    #[test]
+    fn hash_only_announcement_is_valid_pending_resolution() {
+        // A freshly-indexed announcement has only the keccak256 hash, no ciphertext.
+        let mut ann = Announcement::new(Vec::new(), 0x42);
+        ann.ephemeral_key_hash = Some(vec![0x11u8; 32]);
+        assert!(!ann.is_resolved());
+        assert!(ann.validate().is_ok(), "hash-only row must validate");
+    }
+
+    #[test]
+    fn resolved_announcement_requires_full_ciphertext() {
+        let ann = Announcement::new(make_valid_ephemeral_key(), 0x42);
+        assert!(ann.is_resolved());
+        assert!(ann.validate().is_ok());
+    }
+
+    #[test]
+    fn empty_with_no_hash_is_invalid() {
+        let ann = Announcement::new(Vec::new(), 0x42);
+        assert!(
+            ann.validate().is_err(),
+            "no ciphertext and no hash is invalid"
+        );
+    }
+
+    #[test]
+    fn payment_hmac_roundtrips_through_serde() {
+        let mut ann = Announcement::new(make_valid_ephemeral_key(), 0x42);
+        ann.payment_tx_hash_hmac = Some(vec![0x33u8; 32]);
+        let json = serde_json::to_string(&ann).unwrap();
+        let back: Announcement = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.payment_tx_hash_hmac, Some(vec![0x33u8; 32]));
+    }
+
+    #[test]
+    fn metadata_blob_roundtrips_through_serde() {
+        let mut ann = Announcement::new(make_valid_ephemeral_key(), 0x42);
+        ann.ephemeral_key_hash = Some(vec![0xAAu8; 32]);
+        ann.metadata_blob = Some(vec![0x01, 0x02, 0x03]);
+        let json = serde_json::to_string(&ann).unwrap();
+        let back: Announcement = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.ephemeral_key_hash, Some(vec![0xAAu8; 32]));
+        assert_eq!(back.metadata_blob, Some(vec![0x01, 0x02, 0x03]));
+    }
+
+    #[test]
+    fn test_announcement_binary_format_unchanged() {
+        // Verify that to_bytes/from_bytes doesn't include stealth_address
+        let ann = AnnouncementBuilder::new()
+            .ephemeral_key(make_valid_ephemeral_key())
+            .view_tag(0x42)
+            .stealth_address("0xabcd")
+            .build()
+            .unwrap();
+
+        let bytes = ann.to_bytes();
+        let ann2 = Announcement::from_bytes(&bytes).unwrap();
+
+        // stealth_address should not be preserved in binary format
+        assert!(ann2.stealth_address.is_none());
+        // but ephemeral_key and view_tag should be
+        assert_eq!(ann2.ephemeral_key, ann.ephemeral_key);
+        assert_eq!(ann2.view_tag, ann.view_tag);
     }
 }

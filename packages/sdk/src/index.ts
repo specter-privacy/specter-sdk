@@ -25,16 +25,26 @@ export { initSpecterSdk, type LoadOptions } from './init.js';
 export {
   computeViewTag,
   decapsulate,
+  decryptAnnouncementMetadata,
   deriveStealthAddress,
   deriveStealthKeys,
   deriveStealthSuiAddress,
   encapsulate,
+  encryptAnnouncementMetadata,
   generateKeysLocal,
   generateSpecterKeys,
   metaAddressFromPublicKeys,
   parseMetaAddress,
   verifyViewTag,
 } from './crypto.js';
+
+export {
+  decodeAnnouncementMetadata,
+  encodeAnnouncementMetadata,
+  openAnnouncementMetadata,
+  sealAnnouncementMetadata,
+  type EncodeMetadataInput,
+} from './metadata.js';
 
 export {
   createStealthPayment,
@@ -50,12 +60,17 @@ export {
 } from './http.js';
 
 export {
+  ENCRYPTED_METADATA_SIZE,
   ETH_ADDRESS_SIZE,
   KYBER_CIPHERTEXT_SIZE,
   KYBER_PUBLIC_KEY_SIZE,
   KYBER_SECRET_KEY_SIZE,
   KYBER_SHARED_SECRET_SIZE,
   META_ADDRESS_SIZE,
+  METADATA_AMOUNT_SIZE,
+  METADATA_SOURCE_CHAIN_ID_SIZE,
+  METADATA_TX_HASH_SIZE,
+  PLAINTEXT_METADATA_SIZE,
   PROTOCOL_VERSION,
   STEALTH_ETH_PRIVATE_KEY_SIZE,
   STEALTH_SECP256K1_PUBLIC_SIZE,
@@ -70,10 +85,16 @@ export {
 } from './errors.js';
 
 export type {
+  AmountHex,
   AnnouncementInput,
+  AnnouncementMetadata,
+  AnnouncementMetadataInput,
   EncapsulationResult,
+  EncryptedMetadataHex,
   EthAddressHex,
   Hex,
+  MetadataPlaintextHex,
+  TxHashHex,
   KyberCiphertextHex,
   KyberKeyPair,
   KyberPublicKeyHex,

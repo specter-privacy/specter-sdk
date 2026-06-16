@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  ENCRYPTED_METADATA_SIZE,
   ETH_ADDRESS_SIZE,
   KYBER_CIPHERTEXT_SIZE,
   KYBER_PUBLIC_KEY_SIZE,
   KYBER_SECRET_KEY_SIZE,
   KYBER_SHARED_SECRET_SIZE,
   META_ADDRESS_SIZE,
+  PLAINTEXT_METADATA_SIZE,
   PROTOCOL_VERSION,
   STEALTH_ETH_PRIVATE_KEY_SIZE,
   STEALTH_SECP256K1_PUBLIC_SIZE,
@@ -34,6 +36,8 @@ describe('protocol constants', () => {
     expect(SUI_ADDRESS_SIZE).toBe(wasm.suiAddressSize());
     expect(META_ADDRESS_SIZE).toBe(wasm.metaAddressSize());
     expect(PROTOCOL_VERSION).toBe(wasm.protocolVersion());
+    expect(PLAINTEXT_METADATA_SIZE).toBe(wasm.plaintextMetadataSize());
+    expect(ENCRYPTED_METADATA_SIZE).toBe(wasm.encryptedMetadataSize());
   });
 
   it('matches the published FIPS 203 ML-KEM-768 sizes', () => {
