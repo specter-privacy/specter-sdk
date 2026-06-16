@@ -38,3 +38,18 @@ export const STEALTH_ETH_PRIVATE_KEY_SIZE = 32 as const;
 
 /** SPECTER protocol version. */
 export const PROTOCOL_VERSION = 1 as const;
+
+/** Plaintext announcement-metadata block size in bytes (1 + 32 + 32 + 8 + 4). */
+export const PLAINTEXT_METADATA_SIZE = 77 as const;
+
+/** Encrypted announcement-metadata block size in bytes (1 + 76 + 16). */
+export const ENCRYPTED_METADATA_SIZE = 93 as const;
+
+/** Source-chain transaction-hash field size within the metadata block (bytes). */
+export const METADATA_TX_HASH_SIZE = 32 as const;
+
+/** Amount (uint256) field size within the metadata block (bytes). */
+export const METADATA_AMOUNT_SIZE = 32 as const;
+
+/** Source-chain-id (big-endian u64) field size within the metadata block (bytes). */
+export const METADATA_SOURCE_CHAIN_ID_SIZE = 8 as const;

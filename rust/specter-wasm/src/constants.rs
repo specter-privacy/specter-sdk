@@ -7,6 +7,7 @@
 //! the contract test fails.
 
 use specter_core::constants as upstream;
+use specter_crypto::metadata::{ENCRYPTED_METADATA_SIZE, PLAINTEXT_METADATA_SIZE};
 use wasm_bindgen::prelude::*;
 
 /// Returns the ML-KEM-768 public key size in bytes (1184).
@@ -70,4 +71,18 @@ pub fn meta_address_size() -> usize {
 #[must_use]
 pub fn protocol_version() -> u8 {
     upstream::PROTOCOL_VERSION
+}
+
+/// Returns the plaintext announcement-metadata size in bytes (77).
+#[wasm_bindgen(js_name = plaintextMetadataSize)]
+#[must_use]
+pub fn plaintext_metadata_size() -> usize {
+    PLAINTEXT_METADATA_SIZE
+}
+
+/// Returns the encrypted announcement-metadata size in bytes (93).
+#[wasm_bindgen(js_name = encryptedMetadataSize)]
+#[must_use]
+pub fn encrypted_metadata_size() -> usize {
+    ENCRYPTED_METADATA_SIZE
 }

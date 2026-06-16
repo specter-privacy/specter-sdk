@@ -20,6 +20,9 @@ import {
   KYBER_SECRET_KEY_SIZE,
   KYBER_SHARED_SECRET_SIZE,
   META_ADDRESS_SIZE,
+  METADATA_AMOUNT_SIZE,
+  METADATA_TX_HASH_SIZE,
+  PLAINTEXT_METADATA_SIZE,
   STEALTH_ETH_PRIVATE_KEY_SIZE,
   STEALTH_SECP256K1_PUBLIC_SIZE,
   SUI_ADDRESS_SIZE,
@@ -92,12 +95,26 @@ export const StealthEthPrivateInput = fixedSizeHexOrBytes(
 );
 export const MetaAddressBytesInput = fixedSizeHexOrBytes(META_ADDRESS_SIZE, 'meta_address');
 export const ChannelIdInput = fixedSizeHexOrBytes(32, 'channel_id');
+export const TxHashInput = fixedSizeHexOrBytes(METADATA_TX_HASH_SIZE, 'tx_hash');
+export const AmountBytesInput = fixedSizeHexOrBytes(METADATA_AMOUNT_SIZE, 'amount');
+export const MetadataPlaintextInput = fixedSizeHexOrBytes(
+  PLAINTEXT_METADATA_SIZE,
+  'metadata_plaintext',
+);
 export const ViewTagInput = z
   .number()
   .int()
   .min(0)
   .max(255)
   .describe(`a single byte view tag (${VIEW_TAG_SIZE} byte)`);
+
+/** EIP-155 source chain id: a non-negative safe integer. */
+export const SourceChainIdInput = z
+  .number()
+  .int()
+  .nonnegative()
+  .max(Number.MAX_SAFE_INTEGER)
+  .describe('a non-negative EIP-155 chain id');
 
 /** Optional metadata payload accepted by `metaAddressFromPublicKeys`. */
 export const MetaAddressMetadataInput = z

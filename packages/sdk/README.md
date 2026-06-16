@@ -24,6 +24,7 @@ explicit and should only target infrastructure you trust.
   - [View-tag APIs](#view-tag-apis)
   - [Stealth derivation APIs](#stealth-derivation-apis)
   - [High-level payment flow APIs](#high-level-payment-flow-apis)
+  - [Announcement metadata APIs](#announcement-metadata-apis)
   - [Trusted HTTP API client](#trusted-http-api-client)
   - [Constants](#constants)
   - [Errors](#errors)
@@ -47,7 +48,7 @@ explicit and should only target infrastructure you trust.
 - **Production ergonomics**: strict runtime validation, structured errors,
   stable top-level API, and redaction for secret-bearing fields.
 - **Supply-chain posture**: artifacts are built from pinned vendored crypto
-  crates with CI verification and provenance-enabled publishing.
+  crates with CI verification of the vendor pin on every build and release.
 
 ---
 
@@ -373,6 +374,58 @@ const matches = results.filter((r) => r.isMatch);
 
 ---
 
+### Announcement metadata APIs
+
+Each on-chain announcement can carry a fixed **77-byte metadata block**
+(source-chain tx hash, payment amount, source chain id). The payload is
+encrypted with **AES-256-GCM** under a key + nonce derived from the ML-KEM
+shared secret, producing a **93-byte block**. The 1-byte view tag stays in the
+clear at byte 0 so scanners can filter ~255/256 events without decrypting.
+
+The high-level pair is `sealAnnouncementMetadata` (sender) and
+`openAnnouncementMetadata` (recipient):
+
+```ts
+import {
+  sealAnnouncementMetadata,
+  openAnnouncementMetadata,
+  encapsulate,
+  decapsulate,
+} from '@specterpq/sdk';
+
+// Sender: encapsulate to the recipient, then seal payment metadata.
+const enc = encapsulate(recipient.viewing.publicKey);
+const sealed = sealAnnouncementMetadata(
+  {
+    txHash: '0x' + 'ab'.repeat(32), // 32-byte source-chain tx hash
+    amount: 1_000_000_000_000_000_000n, // 1e18 wei, as a bigint
+    sourceChainId: 42161, // Arbitrum One
+  },
+  enc.sharedSecret,
+);
+// publish `sealed` (93-byte hex) alongside `enc.ciphertext` in the announcement.
+// The view tag is derived from the shared secret automatically.
+
+// Recipient: decapsulate, then open the metadata.
+const sharedSecret = decapsulate(enc.ciphertext, recipient.viewing.secretKey);
+const meta = openAnnouncementMetadata(sealed, sharedSecret);
+// meta: { viewTag, txHash?, amount?, sourceChainId? }
+```
+
+`openAnnouncementMetadata` throws `SpecterSdkError` with code
+`METADATA_DECRYPTION_FAILED` when the authentication tag does not verify — the
+expected outcome for announcements addressed to someone else.
+
+Lower-level building blocks are also exported for advanced flows:
+
+- `encodeAnnouncementMetadata({ viewTag, txHash?, amount?, sourceChainId? })` →
+  77-byte `Uint8Array`.
+- `decodeAnnouncementMetadata(block)` → structured `AnnouncementMetadata`.
+- `encryptAnnouncementMetadata(plaintext77, sharedSecret)` → 93-byte hex.
+- `decryptAnnouncementMetadata(encrypted, sharedSecret)` → 77-byte `Uint8Array`.
+
+---
+
 ### Trusted HTTP API client
 
 The default crypto API is local-first. Use `createSpecterApiClient` only when
@@ -453,6 +506,8 @@ import {
   STEALTH_SECP256K1_PUBLIC_SIZE,
   STEALTH_ETH_PRIVATE_KEY_SIZE,
   PROTOCOL_VERSION,
+  PLAINTEXT_METADATA_SIZE,
+  ENCRYPTED_METADATA_SIZE,
 } from '@specterpq/sdk';
 ```
 
@@ -481,6 +536,8 @@ Typical error codes:
 - `INVALID_KEY_SIZE`
 - `INVALID_CIPHERTEXT_SIZE`
 - `INVALID_SHARED_SECRET_SIZE`
+- `INVALID_METADATA_SIZE`
+- `INVALID_METADATA_FIELD`
 - `INVALID_HEX`
 - `INVALID_META_ADDRESS`
 - `INVALID_METADATA_JSON`
@@ -490,6 +547,7 @@ Typical error codes:
 - `ENCAPSULATION_FAILED`
 - `DECAPSULATION_FAILED`
 - `STEALTH_DERIVATION_FAILED`
+- `METADATA_DECRYPTION_FAILED`
 - `WASM_LOAD_FAILED`
 - `INTERNAL_ERROR`
 

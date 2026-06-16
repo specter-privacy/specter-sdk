@@ -28,6 +28,7 @@ pub mod error;
 pub mod kem;
 pub mod keys;
 pub mod meta_address;
+pub mod metadata;
 pub mod view_tag;
 
 /// Initialise panic hook for nicer error messages in browser dev tools.

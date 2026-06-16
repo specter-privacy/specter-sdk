@@ -183,7 +183,8 @@ Then let `release.yml` handle version/publish on merge to `main`.
   pnpm version
   ```
 
-The `release.yml` workflow uses Changesets + npm provenance and publishes `@specterpq/sdk`.
+The `release.yml` workflow uses Changesets to version and publish `@specterpq/sdk`
+(npm provenance is currently disabled; see `package.json` `publishConfig`).
 
 ---
 

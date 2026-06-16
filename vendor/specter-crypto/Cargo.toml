@@ -17,6 +17,8 @@ sha3 = { version = "0.10" }
 zeroize = { version = "1.7", features = ["derive"] }
 subtle = { version = "2.5" }
 rand = { version = "0.8" }
+# AEAD encryption for on-chain metadata
+aes-gcm = { version = "0.10" }
 # Utilities
 hex = { version = "0.4", features = ["serde"] }
 # Ethereum address from secp256k1 (so eth_private_key matches stealth_address)

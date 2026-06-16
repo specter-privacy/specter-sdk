@@ -201,8 +201,15 @@ workspace_deps = {
     "thiserror": 'version = "1.0"',
     "async-trait": 'version = "0.1"',
     "chrono": 'version = "0.4", features = ["serde"]',
+    "aes-gcm": 'version = "0.10"',
     "proptest": 'version = "1.4"',
     "test-case": 'version = "3.3"',
+    # tokio is a dev-dependency used by inline #[tokio::test] async tests in
+    # specter-core (e.g. resolver.rs). We pin only the version and let the
+    # manifest's inline `features = [...]` carry through (merging a `features`
+    # key into the pin would produce a duplicate-key TOML error). Dropping it
+    # instead would break `cargo check --workspace --tests`.
+    "tokio": 'version = "1"',
 }
 for name, pin in workspace_deps.items():
     pat_simple = rf'^{re.escape(name)}\s*=\s*\{{\s*workspace\s*=\s*true\s*\}}\s*$'
@@ -219,6 +226,20 @@ PY
 
 for crate in "${CRATES[@]}"; do
   patch_cargo_toml "$REPO_ROOT/vendor/$crate/Cargo.toml"
+done
+
+# Guard: a standalone (workspace-detached) crate must not retain any
+# `workspace = true` inheritance. If upstream introduces a new shared dep we
+# don't yet pin, the vendored Cargo.toml would otherwise fail to parse with a
+# cryptic error deep in `cargo check`. Fail here instead with a clear pointer.
+for crate in "${CRATES[@]}"; do
+  manifest="$REPO_ROOT/vendor/$crate/Cargo.toml"
+  if grep -nE '(^|[[:space:].])workspace[[:space:]]*=[[:space:]]*true' "$manifest" >/dev/null; then
+    err "vendor/$crate/Cargo.toml still inherits from a workspace after patching:"
+    grep -nE '(^|[[:space:].])workspace[[:space:]]*=[[:space:]]*true' "$manifest" >&2 || true
+    err "add the offending dependency to workspace_deps (or package_inherits) in scripts/sync-backend.sh and re-run."
+    exit 1
+  fi
 done
 
 # Write VENDORED_AT.json so verify-vendor.sh and CI can re-validate the pin.
