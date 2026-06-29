@@ -1,8 +1,8 @@
 {
   "repo": "pranshurastogi/SPECTER",
   "ref": "main",
-  "sha": "8294c2f2215dd45969793181280560a7cddbc99b",
-  "fetched_at": "2026-06-16T17:00:12Z",
+  "sha": "343dca0db710edba886470bab539c3d2a1253c7d",
+  "fetched_at": "2026-06-29T10:24:31Z",
   "source_subdirs": [
     "specter/specter-core",
     "specter/specter-crypto"
