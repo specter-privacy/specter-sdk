@@ -1,65 +1,60 @@
 /**
  * Explicit HTTP client for trusted SPECTER API deployments.
  *
- * The local crypto helpers remain the default security boundary. This module
- * is opt-in for applications that intentionally delegate payment orchestration
- * or scanning to a backend.
+ * ## Security boundary
+ *
+ * The local, in-browser crypto helpers (`generateSpecterKeys`,
+ * `createStealthPayment`, `scanAnnouncement`) are the default and only path
+ * that touches secret keys. This HTTP client is **public-data only**:
+ *
+ *   - `createStealthPaymentRemote` sends a *public* meta-address and receives
+ *     an ephemeral ciphertext + stealth addresses.
+ *   - `publishAnnouncement` sends a server-side payment id and public
+ *     on-chain references.
+ *
+ * There is deliberately **no** remote key-generation or remote scanning: those
+ * require secret keys, and a SPECTER SDK must never transmit a spending or
+ * viewing secret over the network. Generate keys locally with
+ * `generateSpecterKeys` and scan locally with `scanAnnouncement`.
  */
 
 import type { z } from 'zod';
 
 import {
-  ETH_ADDRESS_SIZE,
   KYBER_CIPHERTEXT_SIZE,
-  KYBER_PUBLIC_KEY_SIZE,
-  KYBER_SECRET_KEY_SIZE,
   META_ADDRESS_SIZE,
-  STEALTH_ETH_PRIVATE_KEY_SIZE,
-  SUI_ADDRESS_SIZE,
 } from './constants.js';
 import { SpecterSdkError } from './errors.js';
 import { bytesToHex } from './internal/encoding.js';
-import { attachRedactingSerializers, defineSecretField } from './internal/redact.js';
 import {
   ApiAnnouncementDto,
   ApiCreateStealthResponse,
-  ApiDiscoveryDto,
-  ApiGenerateKeysResponse,
   ApiPaymentId,
   ApiPublishAnnouncementResponse,
-  ApiScanResponse,
   ChannelIdInput,
   EthAddressInput,
   KyberCiphertextInput,
-  KyberPublicKeyInput,
-  KyberSecretKeyInput,
   MetaAddressBytesInput,
   parseHexOrBytes,
-  StealthEthPrivateInput,
   SuiAddressInput,
   trySchemaParse,
   ViewTagInput,
 } from './validation.js';
 
+import {
+  ETH_ADDRESS_SIZE,
+  SUI_ADDRESS_SIZE,
+} from './constants.js';
+
 import type {
   AnnouncementDto,
-  AnnouncementInput,
   EthAddressHex,
   Hex,
   KyberCiphertextHex,
-  KyberKeyPair,
-  KyberPublicKeyHex,
-  KyberSecretKeyHex,
   MetaAddressHex,
   PublishAnnouncementInput,
   PublishAnnouncementResponse,
-  RemoteDiscovery,
-  RemoteGeneratedKeys,
-  RemoteScanRequest,
-  RemoteScanResponse,
   RemoteStealthPayment,
-  SpecterKeys,
-  StealthEthPrivateHex,
   SuiAddressHex,
 } from './types.js';
 
@@ -75,14 +70,17 @@ export interface SpecterApiClientOptions {
 }
 
 export interface SpecterApiClient {
-  readonly generateKeysRemote: () => Promise<RemoteGeneratedKeys>;
+  /**
+   * Ask the API to build a stealth payment for a *public* meta-address. Only
+   * public data crosses the wire; no secret key is involved.
+   */
   readonly createStealthPaymentRemote: (
     metaAddress: MetaAddressHex | Uint8Array,
   ) => Promise<RemoteStealthPayment>;
+  /** Publish an announcement's on-chain references (public data only). */
   readonly publishAnnouncement: (
     input: PublishAnnouncementInput,
   ) => Promise<PublishAnnouncementResponse>;
-  readonly scanRemote: (input: RemoteScanRequest) => Promise<RemoteScanResponse>;
 }
 
 interface ApiAnnouncementWire {
@@ -98,22 +96,8 @@ interface ApiAnnouncementWire {
   readonly chain?: string | null;
 }
 
-interface ApiDiscoveryWire {
-  readonly eth_address?: string;
-  readonly stealth_address?: string;
-  readonly sui_address?: string;
-  readonly stealth_sui_address?: string;
-  readonly eth_private_key: string;
-  readonly stealth_sk: string;
-  readonly announcement_id?: number;
-  readonly payment_id?: string;
-  readonly timestamp?: number;
-}
-
-type ApiGenerateKeysWire = z.infer<typeof ApiGenerateKeysResponse>;
 type ApiCreateStealthWire = z.infer<typeof ApiCreateStealthResponse>;
 type ApiPublishAnnouncementWire = z.infer<typeof ApiPublishAnnouncementResponse>;
-type ApiScanWire = z.infer<typeof ApiScanResponse>;
 
 export function createSpecterApiClient(options: SpecterApiClientOptions): SpecterApiClient {
   const baseUrl = normalizeBaseUrl(options.baseUrl);
@@ -151,18 +135,6 @@ export function createSpecterApiClient(options: SpecterApiClientOptions): Specte
   }
 
   return {
-    async generateKeysRemote() {
-      const raw = await post('/api/v1/keys/generate', {});
-      const parsed = tryApiParse(ApiGenerateKeysResponse, raw) as ApiGenerateKeysWire;
-      const spending = buildRemoteKeyPair(parsed.spending_pk, parsed.spending_sk);
-      const viewing = buildRemoteKeyPair(parsed.viewing_pk, parsed.viewing_sk);
-      const keys: SpecterKeys = { spending, viewing };
-      return {
-        keys,
-        metaAddress: asMetaAddressHex(parsed.meta_address),
-      };
-    },
-
     async createStealthPaymentRemote(metaAddress) {
       const metaHex = asMetaAddressHex(metaAddress);
       const raw = await post('/api/v1/stealth/create', {
@@ -200,15 +172,6 @@ export function createSpecterApiClient(options: SpecterApiClientOptions): Specte
         ...(parsed.announcement !== undefined
           ? { announcement: mapAnnouncement(parsed.announcement) }
           : {}),
-      };
-    },
-
-    async scanRemote(input) {
-      const raw = await post('/api/v1/stealth/scan', buildScanBody(input));
-      const parsed = tryApiParse(ApiScanResponse, raw) as ApiScanWire;
-      const discoveries = parsed.discoveries ?? parsed.results ?? [];
-      return {
-        discoveries: discoveries.map((discovery) => mapDiscovery(discovery)),
       };
     },
   };
@@ -263,27 +226,6 @@ function tryApiParse(
   });
 }
 
-function buildRemoteKeyPair(publicKey: string, secretKey: string): KyberKeyPair {
-  const pk = asPublicKeyHex(publicKey);
-  const sk = asSecretKeyHex(secretKey);
-  const out = { publicKey: pk } as { publicKey: KyberPublicKeyHex; secretKey: KyberSecretKeyHex };
-  defineSecretField(out, 'secretKey', sk);
-  attachRedactingSerializers(out, ['secretKey']);
-  return out;
-}
-
-function asPublicKeyHex(value: string): KyberPublicKeyHex {
-  return bytesToHex<'KyberPublicKey'>(
-    parseHexOrBytes(KyberPublicKeyInput, value, 'kyber_public_key', KYBER_PUBLIC_KEY_SIZE),
-  );
-}
-
-function asSecretKeyHex(value: string): KyberSecretKeyHex {
-  return bytesToHex<'KyberSecretKey'>(
-    parseHexOrBytes(KyberSecretKeyInput, value, 'kyber_secret_key', KYBER_SECRET_KEY_SIZE),
-  );
-}
-
 function asCiphertextHex(value: string): KyberCiphertextHex {
   return bytesToHex<'KyberCiphertext'>(
     parseHexOrBytes(KyberCiphertextInput, value, 'kyber_ciphertext', KYBER_CIPHERTEXT_SIZE),
@@ -305,12 +247,6 @@ function asEthAddressHex(value: string): EthAddressHex {
 function asSuiAddressHex(value: string): SuiAddressHex {
   return bytesToHex<'SuiAddress'>(
     parseHexOrBytes(SuiAddressInput, value, 'sui_address', SUI_ADDRESS_SIZE),
-  );
-}
-
-function asStealthPrivateHex(value: string, field: string): StealthEthPrivateHex {
-  return bytesToHex<'StealthEthPrivate'>(
-    parseHexOrBytes(StealthEthPrivateInput, value, field, STEALTH_ETH_PRIVATE_KEY_SIZE),
   );
 }
 
@@ -344,60 +280,4 @@ function mapAnnouncement(raw: unknown): AnnouncementDto {
     ...(parsed.amount != null ? { amount: parsed.amount } : {}),
     ...(parsed.chain != null ? { chain: parsed.chain } : {}),
   };
-}
-
-function buildScanBody(input: RemoteScanRequest): Record<string, unknown> {
-  return {
-    ...(input.announcements !== undefined
-      ? { announcements: input.announcements.map((announcement) => mapAnnouncementInput(announcement)) }
-      : {}),
-    ...(input.viewingSk !== undefined
-      ? { viewing_sk: asSecretKeyHex(input.viewingSk) }
-      : {}),
-    ...(input.spendingPk !== undefined
-      ? { spending_pk: asPublicKeyHex(input.spendingPk) }
-      : {}),
-    ...(input.spendingSk !== undefined
-      ? { spending_sk: asSecretKeyHex(input.spendingSk) }
-      : {}),
-    ...(input.viewTags !== undefined
-      ? { view_tags: input.viewTags.map((tag) => asViewTag(tag)) }
-      : {}),
-    ...(input.fromTimestamp !== undefined ? { from_timestamp: input.fromTimestamp } : {}),
-    ...(input.toTimestamp !== undefined ? { to_timestamp: input.toTimestamp } : {}),
-  };
-}
-
-function mapAnnouncementInput(input: AnnouncementInput): Record<string, unknown> {
-  return {
-    ephemeral_ciphertext: asCiphertextHex(input.ephemeralCiphertext),
-    view_tag: asViewTag(input.viewTag),
-  };
-}
-
-function mapDiscovery(raw: unknown): RemoteDiscovery {
-  const parsed = tryApiParse(ApiDiscoveryDto, raw) as ApiDiscoveryWire;
-  const ethAddress = parsed.eth_address ?? parsed.stealth_address;
-  const suiAddress = parsed.sui_address ?? parsed.stealth_sui_address;
-  const ethPrivateKey = asStealthPrivateHex(parsed.eth_private_key, 'eth_private_key');
-  const stealthSk = asStealthPrivateHex(parsed.stealth_sk, 'stealth_sk');
-  const out = {
-    ...(ethAddress !== undefined ? { ethAddress: asEthAddressHex(ethAddress) } : {}),
-    ...(suiAddress !== undefined ? { suiAddress: asSuiAddressHex(suiAddress) } : {}),
-    stealthSk,
-    ...(parsed.announcement_id !== undefined ? { announcementId: parsed.announcement_id } : {}),
-    ...(parsed.payment_id !== undefined ? { paymentId: parsed.payment_id } : {}),
-    ...(parsed.timestamp !== undefined ? { timestamp: parsed.timestamp } : {}),
-  } as {
-    ethAddress?: EthAddressHex;
-    suiAddress?: SuiAddressHex;
-    ethPrivateKey: StealthEthPrivateHex;
-    stealthSk: StealthEthPrivateHex;
-    announcementId?: number;
-    paymentId?: string;
-    timestamp?: number;
-  };
-  defineSecretField(out, 'ethPrivateKey', ethPrivateKey);
-  attachRedactingSerializers(out, ['ethPrivateKey', 'stealthSk']);
-  return out;
 }

@@ -100,9 +100,9 @@ describe('secret-safety: EncapsulationResult', () => {
 
 describe('secret-safety: StealthKeys', () => {
   it('redacts the eth private key in JSON.stringify', () => {
-    const { spending } = generateSpecterKeys();
-    const enc = encapsulate(spending.publicKey);
-    const stealth = deriveStealthKeys(spending.publicKey, enc.sharedSecret);
+    const { spending, viewing } = generateSpecterKeys();
+    const enc = encapsulate(viewing.publicKey);
+    const stealth = deriveStealthKeys(spending.secretKey, enc.sharedSecret);
     const json = JSON.stringify(stealth);
     expect(json).not.toContain(stealth.ethPrivateKey);
     expect(json).toContain('[REDACTED]');
@@ -112,9 +112,9 @@ describe('secret-safety: StealthKeys', () => {
   });
 
   it('Object.keys excludes ethPrivateKey', () => {
-    const { spending } = generateSpecterKeys();
-    const enc = encapsulate(spending.publicKey);
-    const stealth = deriveStealthKeys(spending.publicKey, enc.sharedSecret);
+    const { spending, viewing } = generateSpecterKeys();
+    const enc = encapsulate(viewing.publicKey);
+    const stealth = deriveStealthKeys(spending.secretKey, enc.sharedSecret);
     expect(Object.keys(stealth).sort()).toEqual([
       'ethAddress',
       'publicKey',
@@ -123,17 +123,17 @@ describe('secret-safety: StealthKeys', () => {
   });
 
   it('util.inspect redacts the eth private key', () => {
-    const { spending } = generateSpecterKeys();
-    const enc = encapsulate(spending.publicKey);
-    const stealth = deriveStealthKeys(spending.publicKey, enc.sharedSecret);
+    const { spending, viewing } = generateSpecterKeys();
+    const enc = encapsulate(viewing.publicKey);
+    const stealth = deriveStealthKeys(spending.secretKey, enc.sharedSecret);
     const dump = inspect(stealth);
     expect(dump).not.toContain(stealth.ethPrivateKey);
   });
 
   it('property access still returns the eth private key', () => {
-    const { spending } = generateSpecterKeys();
-    const enc = encapsulate(spending.publicKey);
-    const stealth = deriveStealthKeys(spending.publicKey, enc.sharedSecret);
+    const { spending, viewing } = generateSpecterKeys();
+    const enc = encapsulate(viewing.publicKey);
+    const stealth = deriveStealthKeys(spending.secretKey, enc.sharedSecret);
     expect(stealth.ethPrivateKey.startsWith('0x')).toBe(true);
     expect(stealth.ethPrivateKey.length).toBe(2 + 32 * 2);
   });

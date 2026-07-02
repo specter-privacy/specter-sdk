@@ -27,8 +27,17 @@ export const ETH_ADDRESS_SIZE = 20 as const;
 /** Sui address size in bytes. */
 export const SUI_ADDRESS_SIZE = 32 as const;
 
-/** Serialised meta-address size in bytes (1 + 1184 + 1184). */
-export const META_ADDRESS_SIZE = 2369 as const;
+/** Compressed secp256k1 spending public key size in bytes (`0x02|0x03 || X`). */
+export const SPEND_PUBLIC_KEY_SIZE = 33 as const;
+
+/** secp256k1 spending secret key size in bytes. */
+export const SPEND_SECRET_KEY_SIZE = 32 as const;
+
+/** Serialised meta-address size in bytes (1 + 33 + 1184 = hybrid v2 layout). */
+export const META_ADDRESS_SIZE = 1218 as const;
+
+/** Meta-address wire-format version (hybrid secp256k1 spend + ML-KEM view). */
+export const META_ADDRESS_VERSION = 2 as const;
 
 /** Uncompressed secp256k1 public key size in bytes (`0x04 || X || Y`). */
 export const STEALTH_SECP256K1_PUBLIC_SIZE = 65 as const;

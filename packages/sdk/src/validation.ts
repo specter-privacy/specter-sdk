@@ -23,6 +23,8 @@ import {
   METADATA_AMOUNT_SIZE,
   METADATA_TX_HASH_SIZE,
   PLAINTEXT_METADATA_SIZE,
+  SPEND_PUBLIC_KEY_SIZE,
+  SPEND_SECRET_KEY_SIZE,
   STEALTH_ETH_PRIVATE_KEY_SIZE,
   STEALTH_SECP256K1_PUBLIC_SIZE,
   SUI_ADDRESS_SIZE,
@@ -74,6 +76,14 @@ export const KyberPublicKeyInput = fixedSizeHexOrBytes(
 export const KyberSecretKeyInput = fixedSizeHexOrBytes(
   KYBER_SECRET_KEY_SIZE,
   'kyber_secret_key',
+);
+export const SpendPublicKeyInput = fixedSizeHexOrBytes(
+  SPEND_PUBLIC_KEY_SIZE,
+  'spending_pk',
+);
+export const SpendSecretKeyInput = fixedSizeHexOrBytes(
+  SPEND_SECRET_KEY_SIZE,
+  'spending_sk',
 );
 export const KyberCiphertextInput = fixedSizeHexOrBytes(
   KYBER_CIPHERTEXT_SIZE,
@@ -146,16 +156,6 @@ export const ApiAnnouncementDto = z
   })
   .passthrough();
 
-export const ApiGenerateKeysResponse = z
-  .object({
-    spending_pk: ApiHex,
-    spending_sk: ApiHex,
-    viewing_pk: ApiHex,
-    viewing_sk: ApiHex,
-    meta_address: ApiHex,
-  })
-  .strict();
-
 export const ApiCreateStealthResponse = z
   .object({
     payment_id: ApiPaymentId,
@@ -172,27 +172,6 @@ export const ApiPublishAnnouncementResponse = z
     announcement_id: z.number().int().nonnegative().optional(),
     id: z.number().int().nonnegative().optional(),
     announcement: ApiAnnouncementDto.optional(),
-  })
-  .passthrough();
-
-export const ApiDiscoveryDto = z
-  .object({
-    eth_address: ApiHex.optional(),
-    stealth_address: ApiHex.optional(),
-    sui_address: ApiHex.optional(),
-    stealth_sui_address: ApiHex.optional(),
-    eth_private_key: ApiHex,
-    stealth_sk: ApiHex,
-    announcement_id: z.number().int().nonnegative().optional(),
-    payment_id: z.string().min(1).optional(),
-    timestamp: z.number().int().nonnegative().optional(),
-  })
-  .passthrough();
-
-export const ApiScanResponse = z
-  .object({
-    discoveries: z.array(ApiDiscoveryDto).optional(),
-    results: z.array(ApiDiscoveryDto).optional(),
   })
   .passthrough();
 

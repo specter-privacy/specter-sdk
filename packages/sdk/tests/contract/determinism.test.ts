@@ -32,8 +32,8 @@ describe('determinism', () => {
   });
 
   it('stealth eth address depends only on (spending_pk, shared_secret)', () => {
-    const { spending } = generateSpecterKeys();
-    const enc = encapsulate(spending.publicKey);
+    const { spending, viewing } = generateSpecterKeys();
+    const enc = encapsulate(viewing.publicKey);
     const a = deriveStealthAddress(spending.publicKey, enc.sharedSecret);
     const b = deriveStealthAddress(spending.publicKey, enc.sharedSecret);
     expect(a).toBe(b);
@@ -41,28 +41,31 @@ describe('determinism', () => {
   });
 
   it('stealth sui address is deterministic for the same inputs', () => {
-    const { spending } = generateSpecterKeys();
-    const enc = encapsulate(spending.publicKey);
+    const { spending, viewing } = generateSpecterKeys();
+    const enc = encapsulate(viewing.publicKey);
     const a = deriveStealthSuiAddress(spending.publicKey, enc.sharedSecret);
     const b = deriveStealthSuiAddress(spending.publicKey, enc.sharedSecret);
     expect(a).toBe(b);
     expect(a).toMatch(/^0x[0-9a-f]{64}$/u);
   });
 
-  it('stealth eth/sui addresses derived independently match deriveStealthKeys', () => {
-    const { spending } = generateSpecterKeys();
-    const enc = encapsulate(spending.publicKey);
+  it('addresses from the public spend key match those from the secret spend key', () => {
+    // The sender path (public spend key) and the recipient path (secret spend
+    // key) must derive the same stealth address — this is the EC-tweak
+    // agreement P = B + t*G == (b + t)*G.
+    const { spending, viewing } = generateSpecterKeys();
+    const enc = encapsulate(viewing.publicKey);
     const eth = deriveStealthAddress(spending.publicKey, enc.sharedSecret);
     const sui = deriveStealthSuiAddress(spending.publicKey, enc.sharedSecret);
-    const keys = deriveStealthKeys(spending.publicKey, enc.sharedSecret);
+    const keys = deriveStealthKeys(spending.secretKey, enc.sharedSecret);
     expect(keys.ethAddress).toBe(eth);
     expect(keys.suiAddress).toBe(sui);
   });
 
   it('different shared secrets produce different stealth addresses', () => {
-    const { spending } = generateSpecterKeys();
-    const e1 = encapsulate(spending.publicKey);
-    const e2 = encapsulate(spending.publicKey);
+    const { spending, viewing } = generateSpecterKeys();
+    const e1 = encapsulate(viewing.publicKey);
+    const e2 = encapsulate(viewing.publicKey);
     const a1 = deriveStealthAddress(spending.publicKey, e1.sharedSecret);
     const a2 = deriveStealthAddress(spending.publicKey, e2.sharedSecret);
     expect(a1).not.toBe(a2);

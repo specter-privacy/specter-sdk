@@ -10,9 +10,10 @@ Browser-first SDK for the [SPECTER](https://specterpq.com) post-quantum stealth 
 
 SPECTER gives wallets and apps a practical way to move from "one public address forever" to "fresh stealth destination per payment" without giving up UX.
 
-- **What enables it**: ML-KEM-768 (post-quantum KEM), deterministic stealth derivation, and a compact view-tag filter are exposed through Rust->WASM bindings.
-- **Secure key generation**: recipient spending/viewing keys are generated locally inside the WASM crypto layer; no backend round-trip is required.
-- **Flow in one line**: recipient publishes a meta-address -> sender encapsulates to viewing key and derives stealth destinations -> recipient scans announcements and recovers spendable stealth keys only for matches.
+- **What enables it**: a hybrid identity — a **secp256k1 spending keypair** (controls funds, ERC-5564-style additive tweak `P = B + t·G`) plus an **ML-KEM-768 viewing keypair** (post-quantum scanning). Exposed through Rust->WASM bindings.
+- **Only the recipient can spend**: the sender derives the stealth *address* from the public spend key but never the private key; the stealth private key `p = b + t` requires the recipient's spending secret.
+- **Secure key generation**: recipient spending/viewing keys are generated locally inside the WASM crypto layer; secret keys never leave the device (the HTTP client is public-data only).
+- **Flow in one line**: recipient publishes a meta-address -> sender encapsulates to the viewing key and derives stealth destinations -> recipient scans with the viewing secret (detection) and recovers spendable stealth keys with the spending secret only for matches.
 - **Why this is safer than static addresses**: each payment can target a unique stealth address, making trivial address reuse tracking much harder.
 - **Defense-in-depth in SDK design**: strict input/output length checks, typed errors, redaction of secret-bearing fields in JSON/inspect/logging paths, and offline-by-default behavior.
 - **Server flow support**: an opt-in HTTP client covers `payment_id`-bound API flows while keeping network behavior separate from local crypto helpers.
@@ -73,14 +74,19 @@ const meta = metaAddressFromPublicKeys(spending.publicKey, viewing.publicKey);
 const payment = createStealthPayment(meta.hex);
 // submit payment.ethAddress as the recipient, payment.ephemeralCiphertext + payment.viewTag as the announcement
 
-// Recipient scan
+// Recipient scan. Detection needs only the viewing secret + spending PUBLIC
+// key; pass the spending SECRET key to also recover the spendable private key.
 const result = scanAnnouncement(
   { ephemeralCiphertext: payment.ephemeralCiphertext, viewTag: payment.viewTag },
   viewing,
   spending.publicKey,
+  spending.secretKey, // omit for a watch-only scan (no private key returned)
 );
 if (result.isMatch) {
-  // result.stealthKeys.ethPrivateKey is the spendable secp256k1 key for result.stealthKeys.ethAddress
+  // result.detected.ethAddress is always present (addresses + stealth pubkey).
+  // result.stealthKeys.ethPrivateKey is the spendable secp256k1 key, present
+  // only because we supplied spending.secretKey above.
+  const privateKey = result.stealthKeys?.ethPrivateKey;
 }
 
 // Optional trusted API flow: server creates and later publishes the authoritative announcement.

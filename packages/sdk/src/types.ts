@@ -16,6 +16,10 @@ export type Hex<Brand extends string = string> = `0x${string}` & {
 export type KyberPublicKeyHex = Hex<'KyberPublicKey'>;
 /** ML-KEM-768 secret key (2400 bytes = 4802 hex chars after the `0x`). */
 export type KyberSecretKeyHex = Hex<'KyberSecretKey'>;
+/** Compressed secp256k1 spending public key (33 bytes = 66 hex chars). */
+export type Secp256k1SpendPublicHex = Hex<'Secp256k1SpendPublic'>;
+/** secp256k1 spending secret key (32 bytes = 64 hex chars). */
+export type Secp256k1SpendSecretHex = Hex<'Secp256k1SpendSecret'>;
 /** ML-KEM-768 ciphertext (1088 bytes = 2178 hex chars after the `0x`). */
 export type KyberCiphertextHex = Hex<'KyberCiphertext'>;
 /** 32-byte shared secret (64 hex chars after the `0x`). */
@@ -47,11 +51,32 @@ export interface KyberKeyPair {
   readonly secretKey: KyberSecretKeyHex;
 }
 
-/** Spending + viewing keypairs that together make up a SPECTER recipient identity. */
+/**
+ * A secp256k1 spending keypair. It controls funds on Ethereum/Sui and is the
+ * base point for the stealth address tweak. The TS layer marks `secretKey`
+ * non-enumerable.
+ */
+export interface Secp256k1KeyPair {
+  /** 33-byte compressed public key (safe to publish in a meta-address). */
+  readonly publicKey: Secp256k1SpendPublicHex;
+  /** 32-byte secret key (never log this). Non-enumerable in the runtime object. */
+  readonly secretKey: Secp256k1SpendSecretHex;
+}
+
+/**
+ * A SPECTER recipient identity: a secp256k1 spending keypair plus an ML-KEM-768
+ * viewing keypair.
+ *
+ * - `spending` controls funds and is the tweak base point. Only the holder of
+ *   `spending.secretKey` can compute a stealth private key.
+ * - `viewing` provides post-quantum scanning: detection needs only
+ *   `viewing.secretKey` and the *public* `spending.publicKey`, so scanning can
+ *   run on a device that never sees the spending secret.
+ */
 export interface SpecterKeys {
-  /** Used to derive stealth addresses and stealth private keys. */
-  readonly spending: KyberKeyPair;
-  /** Used to scan announcements for incoming payments. */
+  /** secp256k1 spending keypair (controls funds; stealth tweak base point). */
+  readonly spending: Secp256k1KeyPair;
+  /** ML-KEM-768 viewing keypair (used to scan announcements). */
   readonly viewing: KyberKeyPair;
 }
 
@@ -67,11 +92,11 @@ export interface MetaAddressMetadata {
 
 /** Domain shape of a SPECTER meta-address (the publishable recipient identity). */
 export interface MetaAddress {
-  /** Protocol version (currently `1`). */
+  /** Wire-format version (currently `2` — hybrid secp256k1 + ML-KEM). */
   readonly version: number;
-  /** 1184-byte spending public key. */
-  readonly spendingPk: KyberPublicKeyHex;
-  /** 1184-byte viewing public key. */
+  /** 33-byte compressed secp256k1 spending public key. */
+  readonly spendingPk: Secp256k1SpendPublicHex;
+  /** 1184-byte ML-KEM-768 viewing public key. */
   readonly viewingPk: KyberPublicKeyHex;
   /** Optional metadata (description / avatar / createdAt). */
   readonly metadata?: MetaAddressMetadata;
@@ -103,13 +128,22 @@ export interface StealthAddresses {
   readonly suiAddress: SuiAddressHex;
 }
 
-/** Recipient-side stealth keys: addresses + spendable secp256k1 private key. */
-export interface StealthKeys extends StealthAddresses {
-  /** 65-byte uncompressed secp256k1 public key. */
+/**
+ * Detection-only stealth data: the addresses plus the stealth public key,
+ * computable from the recipient's *public* spend key. Contains no secret and
+ * is what a watch-only scanner (viewing secret + spending public) receives.
+ */
+export interface DetectedStealth extends StealthAddresses {
+  /** 65-byte uncompressed secp256k1 stealth public key. */
   readonly publicKey: StealthSecp256k1PublicHex;
+}
+
+/** Recipient-side stealth keys: detection data + spendable secp256k1 private key. */
+export interface StealthKeys extends DetectedStealth {
   /**
    * 32-byte secp256k1 private key that controls funds at `ethAddress` (and,
-   * with the Sui secp256k1 scheme, `suiAddress`). Non-enumerable at runtime.
+   * with the Sui secp256k1 scheme, `suiAddress`). Only derivable from the
+   * spending *secret* key. Non-enumerable at runtime.
    */
   readonly ethPrivateKey: StealthEthPrivateHex;
 }
@@ -120,14 +154,6 @@ export interface StealthPayment extends StealthAddresses {
   readonly ephemeralCiphertext: KyberCiphertextHex;
   /** 1-byte view-tag (0..255) for fast recipient filtering. */
   readonly viewTag: number;
-}
-
-/** API-backed key generation response mapped into SDK-safe camelCase fields. */
-export interface RemoteGeneratedKeys {
-  /** Spending + viewing keypairs returned by the trusted SPECTER API. */
-  readonly keys: SpecterKeys;
-  /** Canonical 2369-byte meta-address from the API. */
-  readonly metaAddress: MetaAddressHex;
 }
 
 /** Announcement DTO returned by the SPECTER API. */
@@ -164,33 +190,6 @@ export interface PublishAnnouncementInput {
 export interface PublishAnnouncementResponse {
   readonly announcementId?: number;
   readonly announcement?: AnnouncementDto;
-}
-
-/** Request body for trusted remote scanning. Prefer local scanning when possible. */
-export interface RemoteScanRequest {
-  readonly announcements?: readonly AnnouncementInput[];
-  readonly viewingSk?: KyberSecretKeyHex;
-  readonly spendingPk?: KyberPublicKeyHex;
-  readonly spendingSk?: KyberSecretKeyHex;
-  readonly viewTags?: readonly number[];
-  readonly fromTimestamp?: number;
-  readonly toTimestamp?: number;
-}
-
-/** Discovery DTO returned by the SPECTER API scan endpoint. */
-export interface RemoteDiscovery {
-  readonly ethAddress?: EthAddressHex;
-  readonly suiAddress?: SuiAddressHex;
-  readonly ethPrivateKey: StealthEthPrivateHex;
-  readonly stealthSk: StealthEthPrivateHex;
-  readonly announcementId?: number;
-  readonly paymentId?: string;
-  readonly timestamp?: number;
-}
-
-/** Remote scan response from the SPECTER API. */
-export interface RemoteScanResponse {
-  readonly discoveries: readonly RemoteDiscovery[];
 }
 
 /**
@@ -251,6 +250,16 @@ export type ScanResult =
     }
   | {
       readonly isMatch: true;
-      /** Recipient-side stealth keys for the matching announcement. */
-      readonly stealthKeys: StealthKeys;
+      /**
+       * Detection data (addresses + stealth public key). Always present on a
+       * match; derived from the *public* spend key, so it contains no secret.
+       */
+      readonly detected: DetectedStealth;
+      /**
+       * Full spendable keys, including the secp256k1 private key. Present only
+       * when a spending *secret* key was supplied to `scanAnnouncement`; a
+       * watch-only scan (viewing secret + spending public only) leaves this
+       * `undefined`.
+       */
+      readonly stealthKeys?: StealthKeys;
     };

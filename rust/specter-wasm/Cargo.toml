@@ -24,6 +24,16 @@ thiserror = "1.0"
 zeroize = { version = "1.7", features = ["derive"] }
 console_error_panic_hook = { version = "0.1", optional = true }
 
+# secp256k1 group arithmetic for the ERC-5564-style stealth tweak
+# (P = B + t*G, p = b + t). `ecdsa` pulls in the `arithmetic` feature that
+# exposes Scalar / ProjectivePoint / PublicKey used by `derive.rs`.
+k256 = { version = "0.13", features = ["ecdsa", "arithmetic"] }
+# Sui address = blake2b-256(scheme_flag || compressed secp256k1 pubkey).
+blake2 = "0.10"
+# secp256k1 spending-key generation. On wasm32 the `getrandom` `js` feature
+# (below) backs `thread_rng()` via `crypto.getRandomValues`.
+rand = "0.8"
+
 # Browser RNG: enabling the `js` feature on getrandom routes
 # `rand::thread_rng()` (used inside specter-crypto) through
 # `crypto.getRandomValues`.
