@@ -10,6 +10,9 @@ use specter_core::constants as upstream;
 use specter_crypto::metadata::{ENCRYPTED_METADATA_SIZE, PLAINTEXT_METADATA_SIZE};
 use wasm_bindgen::prelude::*;
 
+use crate::derive::{SPEND_PUBLIC_SIZE, SPEND_SECRET_SIZE, STEALTH_PUBLIC_SIZE};
+use crate::meta_address::META_ADDRESS_V2_SIZE;
+
 /// Returns the ML-KEM-768 public key size in bytes (1184).
 #[wasm_bindgen(js_name = kyberPublicKeySize)]
 #[must_use]
@@ -59,11 +62,32 @@ pub fn sui_address_size() -> usize {
     upstream::SUI_ADDRESS_SIZE
 }
 
-/// Returns the meta-address serialised payload size in bytes (2369).
+/// Returns the meta-address serialised payload size in bytes (1218 = 1 + 33 + 1184).
 #[wasm_bindgen(js_name = metaAddressSize)]
 #[must_use]
 pub fn meta_address_size() -> usize {
-    upstream::META_ADDRESS_SERIALIZED_SIZE
+    META_ADDRESS_V2_SIZE
+}
+
+/// Returns the compressed secp256k1 spending public key size in bytes (33).
+#[wasm_bindgen(js_name = spendPublicKeySize)]
+#[must_use]
+pub fn spend_public_key_size() -> usize {
+    SPEND_PUBLIC_SIZE
+}
+
+/// Returns the secp256k1 spending secret key size in bytes (32).
+#[wasm_bindgen(js_name = spendSecretKeySize)]
+#[must_use]
+pub fn spend_secret_key_size() -> usize {
+    SPEND_SECRET_SIZE
+}
+
+/// Returns the uncompressed secp256k1 stealth public key size in bytes (65).
+#[wasm_bindgen(js_name = stealthPublicKeySize)]
+#[must_use]
+pub fn stealth_public_key_size() -> usize {
+    STEALTH_PUBLIC_SIZE
 }
 
 /// Returns the SPECTER protocol version (1).

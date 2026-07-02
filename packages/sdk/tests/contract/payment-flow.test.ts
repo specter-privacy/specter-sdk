@@ -40,7 +40,7 @@ describe('full payment flow', () => {
     expect(payment.ethAddress).toMatch(/^0x[0-9a-f]{40}$/u);
     expect(payment.suiAddress).toMatch(/^0x[0-9a-f]{64}$/u);
 
-    // Recipient scans.
+    // Recipient scans WITH their spending secret to recover the spendable key.
     const result = scanAnnouncement(
       {
         ephemeralCiphertext: payment.ephemeralCiphertext,
@@ -48,14 +48,41 @@ describe('full payment flow', () => {
       },
       recipient.viewing,
       recipient.spending.publicKey,
+      recipient.spending.secretKey,
     );
 
     expect(result.isMatch).toBe(true);
     if (result.isMatch) {
-      expect(result.stealthKeys.ethAddress).toBe(payment.ethAddress);
-      expect(result.stealthKeys.suiAddress).toBe(payment.suiAddress);
-      expect(result.stealthKeys.ethPrivateKey).toMatch(/^0x[0-9a-f]{64}$/u);
-      expect(result.stealthKeys.publicKey).toMatch(/^0x04[0-9a-f]{128}$/u);
+      expect(result.detected.ethAddress).toBe(payment.ethAddress);
+      expect(result.detected.suiAddress).toBe(payment.suiAddress);
+      expect(result.stealthKeys).toBeDefined();
+      expect(result.stealthKeys?.ethAddress).toBe(payment.ethAddress);
+      expect(result.stealthKeys?.suiAddress).toBe(payment.suiAddress);
+      expect(result.stealthKeys?.ethPrivateKey).toMatch(/^0x[0-9a-f]{64}$/u);
+      expect(result.stealthKeys?.publicKey).toMatch(/^0x04[0-9a-f]{128}$/u);
+    }
+  });
+
+  it('watch-only scan (viewing secret + spending public only) detects but yields no private key', () => {
+    const recipient = generateSpecterKeys();
+    const meta = metaAddressFromPublicKeys(
+      recipient.spending.publicKey,
+      recipient.viewing.publicKey,
+    );
+    const payment = createStealthPayment(meta.hex);
+
+    // No spending secret supplied.
+    const result = scanAnnouncement(
+      { ephemeralCiphertext: payment.ephemeralCiphertext, viewTag: payment.viewTag },
+      recipient.viewing,
+      recipient.spending.publicKey,
+    );
+
+    expect(result.isMatch).toBe(true);
+    if (result.isMatch) {
+      expect(result.detected.ethAddress).toBe(payment.ethAddress);
+      // No spendable key material without the spending secret.
+      expect(result.stealthKeys).toBeUndefined();
     }
   });
 
@@ -143,8 +170,28 @@ describe('full payment flow', () => {
     );
     expect(recipientEthRederived).toBe(senderEth);
 
-    const stealthKeys = deriveStealthKeys(recipient.spending.publicKey, recipientShared);
+    // Only the spending SECRET yields the private key.
+    const stealthKeys = deriveStealthKeys(recipient.spending.secretKey, recipientShared);
     expect(stealthKeys.ethAddress).toBe(senderEth);
     expect(stealthKeys.ethPrivateKey).toMatch(/^0x[0-9a-f]{64}$/u);
+  });
+
+  it('Issue #1 regression: the public spend key cannot derive a private key', () => {
+    // A sender / anyone holding only the recipient's PUBLIC identity can
+    // compute the address but must not be able to compute the private key.
+    // The public spend key is 33 bytes; deriveStealthKeys requires a 32-byte
+    // SECRET, so passing the public key fails length validation.
+    const recipient = generateSpecterKeys();
+    const meta = metaAddressFromPublicKeys(
+      recipient.spending.publicKey,
+      recipient.viewing.publicKey,
+    );
+    const payment = createStealthPayment(meta.hex);
+    const shared = decapsulate(payment.ephemeralCiphertext, recipient.viewing.secretKey);
+
+    expect(() =>
+      // @ts-expect-error — a public spend key is not a valid secret key input.
+      deriveStealthKeys(recipient.spending.publicKey, shared),
+    ).toThrowError(/expected 32 bytes|INVALID_KEY_SIZE/u);
   });
 });

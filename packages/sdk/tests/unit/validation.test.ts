@@ -6,6 +6,8 @@ import {
   deriveStealthAddress,
   encapsulate,
   generateKeysLocal,
+  generateSpendKey,
+  META_ADDRESS_VERSION,
   metaAddressFromPublicKeys,
   parseMetaAddress,
   SpecterSdkError,
@@ -114,11 +116,13 @@ describe('input validation: SpecterSdkError codes', () => {
     }
   });
 
-  it('metaAddressFromPublicKeys propagates an INVALID_META_ADDRESS for all-zero pks', () => {
+  it('metaAddressFromPublicKeys propagates an INVALID_META_ADDRESS for an invalid spend point', () => {
     expect.assertions(1);
-    const zero = `0x${'00'.repeat(1184)}`;
+    // Right size (33 bytes) but not a valid compressed secp256k1 point.
+    const zeroSpend = `0x${'00'.repeat(33)}`;
+    const zeroView = `0x${'00'.repeat(1184)}`;
     try {
-      metaAddressFromPublicKeys(bad(zero), bad(zero));
+      metaAddressFromPublicKeys(bad(zeroSpend), bad(zeroView));
     } catch (err) {
       expect((err as SpecterSdkError).code).toBe('INVALID_META_ADDRESS');
     }
@@ -136,19 +140,19 @@ describe('input validation: SpecterSdkError codes', () => {
   });
 
   it('parseMetaAddress accepts hex string', () => {
-    const kp = generateKeysLocal();
-    const kp2 = generateKeysLocal();
-    const meta = metaAddressFromPublicKeys(kp.publicKey, kp2.publicKey);
+    const spend = generateSpendKey();
+    const view = generateKeysLocal();
+    const meta = metaAddressFromPublicKeys(spend.publicKey, view.publicKey);
     const reparsed = parseMetaAddress(meta.hex);
-    expect(reparsed.address.spendingPk).toBe(kp.publicKey);
-    expect(reparsed.address.viewingPk).toBe(kp2.publicKey);
-    expect(reparsed.address.version).toBe(1);
+    expect(reparsed.address.spendingPk).toBe(spend.publicKey);
+    expect(reparsed.address.viewingPk).toBe(view.publicKey);
+    expect(reparsed.address.version).toBe(META_ADDRESS_VERSION);
   });
 
   it('parseMetaAddress accepts Uint8Array', () => {
-    const kp = generateKeysLocal();
-    const kp2 = generateKeysLocal();
-    const meta = metaAddressFromPublicKeys(kp.publicKey, kp2.publicKey);
+    const spend = generateSpendKey();
+    const view = generateKeysLocal();
+    const meta = metaAddressFromPublicKeys(spend.publicKey, view.publicKey);
     const reparsed = parseMetaAddress(meta.bytes);
     expect(reparsed.hex).toBe(meta.hex);
   });
@@ -163,9 +167,9 @@ describe('input validation: SpecterSdkError codes', () => {
   });
 
   it('metaAddressFromPublicKeys validates metadata and accepts Unicode description', () => {
-    const kp = generateKeysLocal();
-    const kp2 = generateKeysLocal();
-    const meta = metaAddressFromPublicKeys(kp.publicKey, kp2.publicKey, {
+    const spend = generateSpendKey();
+    const view = generateKeysLocal();
+    const meta = metaAddressFromPublicKeys(spend.publicKey, view.publicKey, {
       description: 'alice ✨',
       avatar: 'ipfs://Qmfoo',
       createdAt: 1700000000,

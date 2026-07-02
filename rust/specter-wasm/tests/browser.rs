@@ -10,15 +10,17 @@
 use serde::Deserialize;
 use specter_core::constants::{
     KYBER_CIPHERTEXT_SIZE, KYBER_PUBLIC_KEY_SIZE, KYBER_SECRET_KEY_SIZE, KYBER_SHARED_SECRET_SIZE,
-    META_ADDRESS_SERIALIZED_SIZE,
 };
 use specter_wasm::derive::{
     derive_stealth_address_js, derive_stealth_keys_js, derive_stealth_sui_address_js,
+    SPEND_PUBLIC_SIZE, SPEND_SECRET_SIZE,
 };
 use specter_wasm::error::WasmError;
 use specter_wasm::kem::{decapsulate_js, encapsulate_js};
 use specter_wasm::keys::{generate_keys, generate_specter_keys};
-use specter_wasm::meta_address::{meta_address_from_public_keys, parse_meta_address};
+use specter_wasm::meta_address::{
+    meta_address_from_public_keys, parse_meta_address, META_ADDRESS_V2_SIZE, META_ADDRESS_VERSION,
+};
 use specter_wasm::metadata::{decrypt_announcement_metadata_js, encrypt_announcement_metadata_js};
 use specter_wasm::view_tag::{compute_view_tag_js, verify_view_tag_js};
 use wasm_bindgen::JsValue;
@@ -101,8 +103,9 @@ fn keygen_is_random_across_calls() {
 #[wasm_bindgen_test]
 fn specter_keys_returns_two_independent_keypairs() {
     let bundle: WireSpecter = from_value(generate_specter_keys().unwrap());
-    assert_eq!(bundle.spending.public_key.len(), KYBER_PUBLIC_KEY_SIZE);
-    assert_eq!(bundle.spending.secret_key.len(), KYBER_SECRET_KEY_SIZE);
+    // Spending is a secp256k1 keypair; viewing is ML-KEM-768.
+    assert_eq!(bundle.spending.public_key.len(), SPEND_PUBLIC_SIZE);
+    assert_eq!(bundle.spending.secret_key.len(), SPEND_SECRET_SIZE);
     assert_eq!(bundle.viewing.public_key.len(), KYBER_PUBLIC_KEY_SIZE);
     assert_eq!(bundle.viewing.secret_key.len(), KYBER_SECRET_KEY_SIZE);
     assert_ne!(bundle.spending.public_key, bundle.viewing.public_key);
@@ -164,8 +167,8 @@ fn meta_address_round_trips_in_browser() {
         .unwrap(),
     );
 
-    assert_eq!(built.version, 1);
-    assert_eq!(built.bytes.len(), META_ADDRESS_SERIALIZED_SIZE);
+    assert_eq!(built.version, META_ADDRESS_VERSION);
+    assert_eq!(built.bytes.len(), META_ADDRESS_V2_SIZE);
     assert_eq!(built.spending_pk, bundle.spending.public_key);
     assert_eq!(built.viewing_pk, bundle.viewing.public_key);
 
@@ -187,7 +190,7 @@ fn meta_address_with_metadata_json() {
         )
         .unwrap(),
     );
-    assert_eq!(built.version, 1);
+    assert_eq!(built.version, META_ADDRESS_VERSION);
 }
 
 #[wasm_bindgen_test]
@@ -232,8 +235,9 @@ fn full_payment_flow_in_browser() {
     let receiver_view_tag = compute_view_tag_js(&decap.shared_secret).unwrap();
     assert_eq!(sender_view_tag, receiver_view_tag);
 
+    // Only the spending *secret* yields the spendable stealth private key.
     let stealth: WireStealthKeys = from_value(
-        derive_stealth_keys_js(&bundle.spending.public_key, &decap.shared_secret).unwrap(),
+        derive_stealth_keys_js(&bundle.spending.secret_key, &decap.shared_secret).unwrap(),
     );
     assert_eq!(stealth.eth_address, sender_eth_addr);
     assert_eq!(stealth.sui_address, sender_sui_addr);

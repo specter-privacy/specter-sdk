@@ -21,6 +21,8 @@ import {
   KYBER_SHARED_SECRET_SIZE,
   META_ADDRESS_SIZE,
   PLAINTEXT_METADATA_SIZE,
+  SPEND_PUBLIC_KEY_SIZE,
+  SPEND_SECRET_KEY_SIZE,
   STEALTH_ETH_PRIVATE_KEY_SIZE,
   STEALTH_SECP256K1_PUBLIC_SIZE,
   SUI_ADDRESS_SIZE,
@@ -38,6 +40,8 @@ import {
   MetadataPlaintextInput,
   parseHexOrBytes,
   SharedSecretInput,
+  SpendPublicKeyInput,
+  SpendSecretKeyInput,
   ViewTagInput,
   expectByteLength,
   trySchemaParse,
@@ -45,6 +49,7 @@ import {
 } from './validation.js';
 
 import type {
+  DetectedStealth,
   EncapsulationResult,
   EncryptedMetadataHex,
   EthAddressHex,
@@ -57,6 +62,9 @@ import type {
   MetaAddressHex,
   MetaAddressMetadata,
   MetadataPlaintextHex,
+  Secp256k1KeyPair,
+  Secp256k1SpendPublicHex,
+  Secp256k1SpendSecretHex,
   SharedSecretHex,
   SpecterKeys,
   StealthEthPrivateHex,
@@ -86,6 +94,11 @@ interface WireEncapsulation {
 }
 interface WireDecapsulation {
   shared_secret: ByteArrayWire;
+}
+interface WireStealthPublic {
+  eth_address: ByteArrayWire;
+  sui_address: ByteArrayWire;
+  public_key: ByteArrayWire;
 }
 interface WireStealthKeys {
   eth_address: ByteArrayWire;
@@ -132,21 +145,50 @@ function buildKeyPair(wire: WireKeyPair): KyberKeyPair {
   return out;
 }
 
+function buildSpendKeyPair(wire: WireKeyPair): Secp256k1KeyPair {
+  const pkBytes = expectByteLength(
+    toBytes(wire.public_key),
+    SPEND_PUBLIC_KEY_SIZE,
+    'spending_pk',
+  );
+  const skBytes = expectByteLength(
+    toBytes(wire.secret_key),
+    SPEND_SECRET_KEY_SIZE,
+    'spending_sk',
+  );
+  const publicKey = bytesToHex<'Secp256k1SpendPublic'>(pkBytes);
+  const secretKey = bytesToHex<'Secp256k1SpendSecret'>(skBytes);
+  const out = { publicKey } as {
+    publicKey: Secp256k1SpendPublicHex;
+    secretKey: Secp256k1SpendSecretHex;
+  };
+  defineSecretField(out, 'secretKey', secretKey);
+  attachRedactingSerializers(out, ['secretKey']);
+  return out;
+}
+
 /* ----------------------------- Keygen ----------------------------- */
 
-/** Generate a single ML-KEM-768 keypair. */
+/** Generate a single ML-KEM-768 keypair (used for the viewing role). */
 export function generateKeysLocal(): KyberKeyPair {
   const wasm = getWasmSync();
   const wire = bridgeCall<WireKeyPair>(() => wasm.generateKeys() as WireKeyPair);
   return buildKeyPair(wire);
 }
 
-/** Generate a complete SPECTER recipient identity (spending + viewing). */
+/** Generate a single secp256k1 spending keypair. */
+export function generateSpendKey(): Secp256k1KeyPair {
+  const wasm = getWasmSync();
+  const wire = bridgeCall<WireKeyPair>(() => wasm.generateSpendKey() as WireKeyPair);
+  return buildSpendKeyPair(wire);
+}
+
+/** Generate a complete SPECTER recipient identity (secp256k1 spending + ML-KEM viewing). */
 export function generateSpecterKeys(): SpecterKeys {
   const wasm = getWasmSync();
   const wire = bridgeCall<WireSpecterKeys>(() => wasm.generateSpecterKeys() as WireSpecterKeys);
   return {
-    spending: buildKeyPair(wire.spending),
+    spending: buildSpendKeyPair(wire.spending),
     viewing: buildKeyPair(wire.viewing),
   };
 }
@@ -245,17 +287,21 @@ export function verifyViewTag(
 
 /* ----------------------------- Derivation ----------------------------- */
 
-/** Derive only the stealth Ethereum address. */
+/**
+ * Derive only the stealth Ethereum address from the recipient's **public**
+ * spending key. This is the sender path and the watch-only detection path; it
+ * yields the address but never the private key.
+ */
 export function deriveStealthAddress(
-  spendingPk: KyberPublicKeyHex | Uint8Array,
+  spendingPk: Secp256k1SpendPublicHex | Uint8Array,
   sharedSecret: SharedSecretHex | Uint8Array,
 ): EthAddressHex {
   const wasm = getWasmSync();
   const pkBytes = parseHexOrBytes(
-    KyberPublicKeyInput,
+    SpendPublicKeyInput,
     spendingPk,
     'spending_pk',
-    KYBER_PUBLIC_KEY_SIZE,
+    SPEND_PUBLIC_KEY_SIZE,
   );
   const ssBytes = parseHexOrBytes(
     SharedSecretInput,
@@ -270,17 +316,17 @@ export function deriveStealthAddress(
   return bytesToHex<'EthAddress'>(ethBytes);
 }
 
-/** Derive only the stealth Sui address. */
+/** Derive only the stealth Sui address from the recipient's **public** spending key. */
 export function deriveStealthSuiAddress(
-  spendingPk: KyberPublicKeyHex | Uint8Array,
+  spendingPk: Secp256k1SpendPublicHex | Uint8Array,
   sharedSecret: SharedSecretHex | Uint8Array,
 ): SuiAddressHex {
   const wasm = getWasmSync();
   const pkBytes = parseHexOrBytes(
-    KyberPublicKeyInput,
+    SpendPublicKeyInput,
     spendingPk,
     'spending_pk',
-    KYBER_PUBLIC_KEY_SIZE,
+    SPEND_PUBLIC_KEY_SIZE,
   );
   const ssBytes = parseHexOrBytes(
     SharedSecretInput,
@@ -295,17 +341,60 @@ export function deriveStealthSuiAddress(
   return bytesToHex<'SuiAddress'>(suiBytes);
 }
 
-/** Derive the stealth Eth + Sui addresses **and** the spendable secp256k1 private key. */
+/**
+ * Derive both stealth addresses **and** the stealth public key from the
+ * recipient's **public** spending key. Contains no secret material — this is
+ * the sender path and the watch-only detection path.
+ */
+export function deriveStealthPublic(
+  spendingPk: Secp256k1SpendPublicHex | Uint8Array,
+  sharedSecret: SharedSecretHex | Uint8Array,
+): DetectedStealth {
+  const wasm = getWasmSync();
+  const pkBytes = parseHexOrBytes(
+    SpendPublicKeyInput,
+    spendingPk,
+    'spending_pk',
+    SPEND_PUBLIC_KEY_SIZE,
+  );
+  const ssBytes = parseHexOrBytes(
+    SharedSecretInput,
+    sharedSecret,
+    'shared_secret',
+    KYBER_SHARED_SECRET_SIZE,
+  );
+  const wire = bridgeCall<WireStealthPublic>(
+    () => wasm.deriveStealthPublic(pkBytes, ssBytes) as WireStealthPublic,
+  );
+  const ethBytes = expectByteLength(toBytes(wire.eth_address), ETH_ADDRESS_SIZE, 'eth_address');
+  const suiBytes = expectByteLength(toBytes(wire.sui_address), SUI_ADDRESS_SIZE, 'sui_address');
+  const pubBytes = expectByteLength(
+    toBytes(wire.public_key),
+    STEALTH_SECP256K1_PUBLIC_SIZE,
+    'public_key',
+  );
+  return {
+    ethAddress: bytesToHex<'EthAddress'>(ethBytes),
+    suiAddress: bytesToHex<'SuiAddress'>(suiBytes),
+    publicKey: bytesToHex<'StealthSecp256k1Public'>(pubBytes),
+  };
+}
+
+/**
+ * Derive the stealth addresses **and** the spendable secp256k1 private key from
+ * the recipient's **secret** spending key. Only the holder of the spending
+ * secret can call this — passing a public key throws `INVALID_KEY_SIZE`.
+ */
 export function deriveStealthKeys(
-  spendingPk: KyberPublicKeyHex | Uint8Array,
+  spendingSk: Secp256k1SpendSecretHex | Uint8Array,
   sharedSecret: SharedSecretHex | Uint8Array,
 ): StealthKeys {
   const wasm = getWasmSync();
-  const pkBytes = parseHexOrBytes(
-    KyberPublicKeyInput,
-    spendingPk,
-    'spending_pk',
-    KYBER_PUBLIC_KEY_SIZE,
+  const skBytes = parseHexOrBytes(
+    SpendSecretKeyInput,
+    spendingSk,
+    'spending_sk',
+    SPEND_SECRET_KEY_SIZE,
   );
   const ssBytes = parseHexOrBytes(
     SharedSecretInput,
@@ -314,7 +403,7 @@ export function deriveStealthKeys(
     KYBER_SHARED_SECRET_SIZE,
   );
   const wire = bridgeCall<WireStealthKeys>(
-    () => wasm.deriveStealthKeys(pkBytes, ssBytes) as WireStealthKeys,
+    () => wasm.deriveStealthKeys(skBytes, ssBytes) as WireStealthKeys,
   );
   const ethBytes = expectByteLength(toBytes(wire.eth_address), ETH_ADDRESS_SIZE, 'eth_address');
   const suiBytes = expectByteLength(toBytes(wire.sui_address), SUI_ADDRESS_SIZE, 'sui_address');
@@ -346,18 +435,21 @@ export function deriveStealthKeys(
 
 /* ----------------------------- Meta-address ----------------------------- */
 
-/** Build a meta-address from two ML-KEM-768 public keys + optional metadata. */
+/**
+ * Build a meta-address from a secp256k1 spending public key (33 bytes), an
+ * ML-KEM-768 viewing public key (1184 bytes), and optional metadata.
+ */
 export function metaAddressFromPublicKeys(
-  spendingPk: KyberPublicKeyHex | Uint8Array,
+  spendingPk: Secp256k1SpendPublicHex | Uint8Array,
   viewingPk: KyberPublicKeyHex | Uint8Array,
   metadata?: MetaAddressMetadata,
 ): MetaAddressBundle {
   const wasm = getWasmSync();
   const spending = parseHexOrBytes(
-    KyberPublicKeyInput,
+    SpendPublicKeyInput,
     spendingPk,
     'spending_pk',
-    KYBER_PUBLIC_KEY_SIZE,
+    SPEND_PUBLIC_KEY_SIZE,
   );
   const viewing = parseHexOrBytes(
     KyberPublicKeyInput,
@@ -412,7 +504,7 @@ export function parseMetaAddress(input: MetaAddressHex | Uint8Array): MetaAddres
 function wireMetaToBundle(wire: WireMetaAddress): MetaAddressBundle {
   const spendingBytes = expectByteLength(
     toBytes(wire.spending_pk),
-    KYBER_PUBLIC_KEY_SIZE,
+    SPEND_PUBLIC_KEY_SIZE,
     'spending_pk',
   );
   const viewingBytes = expectByteLength(
@@ -447,7 +539,7 @@ function wireMetaToBundle(wire: WireMetaAddress): MetaAddressBundle {
 
   const address: MetaAddress = {
     version: wire.version,
-    spendingPk: bytesToHex<'KyberPublicKey'>(spendingBytes),
+    spendingPk: bytesToHex<'Secp256k1SpendPublic'>(spendingBytes),
     viewingPk: bytesToHex<'KyberPublicKey'>(viewingBytes),
     ...(metadata !== undefined ? { metadata } : {}),
   };
