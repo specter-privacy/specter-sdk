@@ -1,6 +1,6 @@
 {
   "name": "@specterpq/sdk",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Browser-first SDK for SPECTER, the post-quantum stealth address protocol. Generates ML-KEM-768 keys, builds meta-addresses, encapsulates and decapsulates ephemeral secrets, computes view-tags, and derives stealth Ethereum and Sui addresses entirely in the user's browser via Rust compiled to WebAssembly.",
   "license": "Apache-2.0",
   "author": "SPECTER Team <hello@specterpq.com>",

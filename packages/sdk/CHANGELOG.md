@@ -1,5 +1,16 @@
 # @specterpq/sdk
 
+## 1.0.1
+
+### Patch Changes
+
+- Docs: correct stale meta-address size in doc comments and clarify version constants.
+  - `MetaAddressHex`, `MetaAddressBundle.bytes`, and `parseMetaAddress` JSDoc now say the serialised meta-address is **1218 bytes** (the hybrid v2 layout), not the pre-1.0 `2369`.
+  - README meta-address example prints the correct `meta.bytes.length` (1218) and `meta.address.version` (2).
+  - `PROTOCOL_VERSION` (1) and `META_ADDRESS_VERSION` (2) doc comments now cross-reference each other so the two coexisting version numbers are no longer confusable.
+
+  Comment/documentation only — no runtime, type, or ABI changes.
+
 ## 1.0.0
 
 ### Major Changes
