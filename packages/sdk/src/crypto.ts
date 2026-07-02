@@ -481,7 +481,7 @@ export function metaAddressFromPublicKeys(
   return wireMetaToBundle(wire);
 }
 
-/** Parse a 2369-byte serialised meta-address. */
+/** Parse a 1218-byte serialised meta-address. */
 export function parseMetaAddress(input: MetaAddressHex | Uint8Array): MetaAddressBundle {
   const wasm = getWasmSync();
   let bytes: Uint8Array;

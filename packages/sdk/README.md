@@ -207,8 +207,8 @@ const meta = metaAddressFromPublicKeys(
 );
 
 console.log(meta.hex);           // publishable
-console.log(meta.bytes.length);  // 2369
-console.log(meta.address.version); // 1
+console.log(meta.bytes.length);  // 1218
+console.log(meta.address.version); // 2 (META_ADDRESS_VERSION)
 ```
 
 #### `parseMetaAddress(input)`

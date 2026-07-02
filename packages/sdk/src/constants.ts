@@ -36,7 +36,12 @@ export const SPEND_SECRET_KEY_SIZE = 32 as const;
 /** Serialised meta-address size in bytes (1 + 33 + 1184 = hybrid v2 layout). */
 export const META_ADDRESS_SIZE = 1218 as const;
 
-/** Meta-address wire-format version (hybrid secp256k1 spend + ML-KEM view). */
+/**
+ * Meta-address wire-format version — the first byte of a serialised
+ * meta-address (currently `2`, the hybrid secp256k1-spend + ML-KEM-view
+ * layout). This is independent of {@link PROTOCOL_VERSION}: it tracks only the
+ * meta-address binary format, not the overall SPECTER protocol revision.
+ */
 export const META_ADDRESS_VERSION = 2 as const;
 
 /** Uncompressed secp256k1 public key size in bytes (`0x04 || X || Y`). */
@@ -45,7 +50,11 @@ export const STEALTH_SECP256K1_PUBLIC_SIZE = 65 as const;
 /** secp256k1 private key size in bytes. */
 export const STEALTH_ETH_PRIVATE_KEY_SIZE = 32 as const;
 
-/** SPECTER protocol version. */
+/**
+ * Overall SPECTER protocol version (currently `1`). Do not confuse this with
+ * {@link META_ADDRESS_VERSION} (`2`), which is the meta-address *binary format*
+ * version and is bumped independently of the protocol revision.
+ */
 export const PROTOCOL_VERSION = 1 as const;
 
 /** Plaintext announcement-metadata block size in bytes (1 + 32 + 32 + 8 + 4). */

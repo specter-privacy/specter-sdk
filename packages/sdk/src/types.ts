@@ -32,7 +32,7 @@ export type SuiAddressHex = Hex<'SuiAddress'>;
 export type StealthSecp256k1PublicHex = Hex<'StealthSecp256k1Public'>;
 /** 32-byte secp256k1 private key. */
 export type StealthEthPrivateHex = Hex<'StealthEthPrivate'>;
-/** 2369-byte serialised meta-address. */
+/** 1218-byte serialised meta-address. */
 export type MetaAddressHex = Hex<'MetaAddress'>;
 /** 93-byte encrypted announcement-metadata block. */
 export type EncryptedMetadataHex = Hex<'EncryptedMetadata'>;
@@ -106,7 +106,7 @@ export interface MetaAddress {
 export interface MetaAddressBundle {
   /** Domain shape suitable for inspection / serialisation. */
   readonly address: MetaAddress;
-  /** Canonical 2369-byte serialised payload as a `Uint8Array`. */
+  /** Canonical 1218-byte serialised payload as a `Uint8Array`. */
   readonly bytes: Uint8Array;
   /** Same payload as a `0x`-prefixed hex string for ENS / SuiNS text records. */
   readonly hex: MetaAddressHex;
