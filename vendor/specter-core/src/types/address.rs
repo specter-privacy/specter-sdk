@@ -5,8 +5,11 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::KyberPublicKey;
-use crate::constants::{ETH_ADDRESS_SIZE, PROTOCOL_VERSION, SUI_ADDRESS_SIZE};
+use super::{KyberPublicKey, Secp256k1PublicKey};
+use crate::constants::{
+    ETH_ADDRESS_SIZE, KYBER_PUBLIC_KEY_SIZE, META_ADDRESS_SERIALIZED_SIZE, PROTOCOL_VERSION,
+    SECP256K1_PUBLIC_KEY_SIZE, SUI_ADDRESS_SIZE,
+};
 use crate::error::{Result, SpecterError};
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -18,28 +21,31 @@ use crate::error::{Result, SpecterError};
 /// This is what gets stored on IPFS and linked from ENS text records.
 /// Senders use this to create stealth addresses.
 ///
-/// # Structure
-/// - `version`: Protocol version for forward compatibility
-/// - `spending_pk`: Public key for spending (stealth address derivation)
-/// - `viewing_pk`: Public key for viewing (allows third-party auditing)
+/// # Structure (protocol v2)
+/// - `version`: Protocol version (must be 2)
+/// - `spending_pub`: secp256k1 spending public key (33 bytes) — used to derive
+///   the stealth *address*. Only the holder of the matching secret scalar can
+///   derive the stealth spend key.
+/// - `viewing_pk`: ML-KEM-768 viewing public key (1184 bytes) — used for
+///   post-quantum payment discovery / third-party auditing.
 ///
 /// # Example
 /// ```ignore
 /// use specter_core::MetaAddress;
 ///
 /// // Create meta-address from generated keys
-/// let meta = MetaAddress::new(spending_pk, viewing_pk);
+/// let meta = MetaAddress::new(spending_pub, viewing_pk);
 ///
 /// // Serialize for ENS storage
-/// let encoded = meta.to_compact_string();
+/// let encoded = meta.to_hex();
 /// ```
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MetaAddress {
-    /// Protocol version (for forward compatibility)
+    /// Protocol version (must be 2)
     pub version: u8,
-    /// Spending public key - used to derive stealth addresses
-    pub spending_pk: KyberPublicKey,
-    /// Viewing public key - used for scanning announcements
+    /// secp256k1 spending public key - used to derive stealth addresses
+    pub spending_pub: Secp256k1PublicKey,
+    /// ML-KEM viewing public key - used for scanning announcements
     pub viewing_pk: KyberPublicKey,
     /// Optional metadata
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -62,10 +68,10 @@ pub struct MetaAddressMetadata {
 
 impl MetaAddress {
     /// Creates a new meta-address with the current protocol version.
-    pub fn new(spending_pk: KyberPublicKey, viewing_pk: KyberPublicKey) -> Self {
+    pub fn new(spending_pub: Secp256k1PublicKey, viewing_pk: KyberPublicKey) -> Self {
         Self {
             version: PROTOCOL_VERSION,
-            spending_pk,
+            spending_pub,
             viewing_pk,
             metadata: None,
         }
@@ -73,13 +79,13 @@ impl MetaAddress {
 
     /// Creates a meta-address with metadata.
     pub fn with_metadata(
-        spending_pk: KyberPublicKey,
+        spending_pub: Secp256k1PublicKey,
         viewing_pk: KyberPublicKey,
         metadata: MetaAddressMetadata,
     ) -> Self {
         Self {
             version: PROTOCOL_VERSION,
-            spending_pk,
+            spending_pub,
             viewing_pk,
             metadata: Some(metadata),
         }
@@ -87,14 +93,17 @@ impl MetaAddress {
 
     /// Validates the meta-address structure.
     pub fn validate(&self) -> Result<()> {
-        if self.version == 0 {
-            return Err(SpecterError::InvalidMetaAddress(
-                "version cannot be 0".into(),
-            ));
+        if self.version != PROTOCOL_VERSION {
+            return Err(SpecterError::InvalidMetaAddress(format!(
+                "unsupported protocol version {} (expected {}); v1 meta-addresses are \
+                 insecure and no longer accepted — regenerate keys",
+                self.version, PROTOCOL_VERSION
+            )));
         }
 
-        // Check for obviously invalid keys (all zeros)
-        if self.spending_pk.as_bytes().iter().all(|&b| b == 0) {
+        // Reject an on-curve-but-uninitialised (all-zero) spending key. A real
+        // secp256k1 point is validated at construction time in Secp256k1PublicKey.
+        if self.spending_pub.as_bytes().iter().all(|&b| b == 0) {
             return Err(SpecterError::InvalidMetaAddress(
                 "spending key is all zeros".into(),
             ));
@@ -111,31 +120,34 @@ impl MetaAddress {
 
     /// Serializes to compact binary format.
     ///
-    /// Format: version (1) || spending_pk (1184) || viewing_pk (1184)
+    /// Format (v2): version (1) || spending_pub (33) || viewing_pk (1184)
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(1 + 1184 + 1184);
+        let mut bytes = Vec::with_capacity(META_ADDRESS_SERIALIZED_SIZE);
         bytes.push(self.version);
-        bytes.extend_from_slice(self.spending_pk.as_bytes());
+        bytes.extend_from_slice(self.spending_pub.as_bytes());
         bytes.extend_from_slice(self.viewing_pk.as_bytes());
         bytes
     }
 
-    /// Deserializes from compact binary format.
+    /// Deserializes from compact binary format (v2 only).
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() < 1 + 1184 + 1184 {
+        if bytes.len() < META_ADDRESS_SERIALIZED_SIZE {
             return Err(SpecterError::InvalidMetaAddress(format!(
-                "too short: {} bytes",
-                bytes.len()
+                "too short: {} bytes, expected {}",
+                bytes.len(),
+                META_ADDRESS_SERIALIZED_SIZE
             )));
         }
 
         let version = bytes[0];
-        let spending_pk = KyberPublicKey::from_bytes(&bytes[1..1185])?;
-        let viewing_pk = KyberPublicKey::from_bytes(&bytes[1185..2369])?;
+        let spending_end = 1 + SECP256K1_PUBLIC_KEY_SIZE;
+        let viewing_end = spending_end + KYBER_PUBLIC_KEY_SIZE;
+        let spending_pub = Secp256k1PublicKey::from_bytes(&bytes[1..spending_end])?;
+        let viewing_pk = KyberPublicKey::from_bytes(&bytes[spending_end..viewing_end])?;
 
         let meta = Self {
             version,
-            spending_pk,
+            spending_pub,
             viewing_pk,
             metadata: None,
         };
@@ -160,7 +172,7 @@ impl Default for MetaAddress {
     fn default() -> Self {
         Self {
             version: PROTOCOL_VERSION,
-            spending_pk: KyberPublicKey::default(),
+            spending_pub: Secp256k1PublicKey::default(),
             viewing_pk: KyberPublicKey::default(),
             metadata: None,
         }
@@ -394,56 +406,74 @@ mod tests {
     use super::*;
     use crate::constants::KYBER_PUBLIC_KEY_SIZE;
 
+    /// A deterministic, valid compressed secp256k1 public key for tests.
+    fn test_spending_pub(seed: u8) -> Secp256k1PublicKey {
+        let sk = k256::SecretKey::from_slice(&[seed; 32]).unwrap();
+        let compressed = sk.public_key().to_sec1_bytes();
+        Secp256k1PublicKey::from_bytes(&compressed).unwrap()
+    }
+
     #[test]
     fn test_meta_address_creation() {
-        let spending_pk = KyberPublicKey::from_array([1u8; KYBER_PUBLIC_KEY_SIZE]);
+        let spending_pub = test_spending_pub(1);
         let viewing_pk = KyberPublicKey::from_array([2u8; KYBER_PUBLIC_KEY_SIZE]);
 
-        let meta = MetaAddress::new(spending_pk.clone(), viewing_pk.clone());
+        let meta = MetaAddress::new(spending_pub.clone(), viewing_pk.clone());
         assert_eq!(meta.version, PROTOCOL_VERSION);
-        assert_eq!(meta.spending_pk, spending_pk);
+        assert_eq!(meta.spending_pub, spending_pub);
         assert_eq!(meta.viewing_pk, viewing_pk);
     }
 
     #[test]
     fn test_meta_address_bytes_roundtrip() {
-        let spending_pk = KyberPublicKey::from_array([0xAA; KYBER_PUBLIC_KEY_SIZE]);
+        let spending_pub = test_spending_pub(0xAA);
         let viewing_pk = KyberPublicKey::from_array([0xBB; KYBER_PUBLIC_KEY_SIZE]);
 
-        let meta = MetaAddress::new(spending_pk, viewing_pk);
+        let meta = MetaAddress::new(spending_pub, viewing_pk);
         let bytes = meta.to_bytes();
+        assert_eq!(bytes.len(), META_ADDRESS_SERIALIZED_SIZE);
         let meta2 = MetaAddress::from_bytes(&bytes).unwrap();
 
         assert_eq!(meta.version, meta2.version);
-        assert_eq!(meta.spending_pk, meta2.spending_pk);
+        assert_eq!(meta.spending_pub, meta2.spending_pub);
         assert_eq!(meta.viewing_pk, meta2.viewing_pk);
     }
 
     #[test]
     fn test_meta_address_hex_roundtrip() {
-        let spending_pk = KyberPublicKey::from_array([0x12; KYBER_PUBLIC_KEY_SIZE]);
+        let spending_pub = test_spending_pub(0x12);
         let viewing_pk = KyberPublicKey::from_array([0x34; KYBER_PUBLIC_KEY_SIZE]);
 
-        let meta = MetaAddress::new(spending_pk, viewing_pk);
+        let meta = MetaAddress::new(spending_pub, viewing_pk);
         let hex = meta.to_hex();
         let meta2 = MetaAddress::from_hex(&hex).unwrap();
 
-        assert_eq!(meta.spending_pk, meta2.spending_pk);
+        assert_eq!(meta.spending_pub, meta2.spending_pub);
     }
 
     #[test]
     fn test_meta_address_validation() {
         // Valid meta-address
         let valid = MetaAddress::new(
-            KyberPublicKey::from_array([1u8; KYBER_PUBLIC_KEY_SIZE]),
+            test_spending_pub(1),
             KyberPublicKey::from_array([2u8; KYBER_PUBLIC_KEY_SIZE]),
         );
         assert!(valid.validate().is_ok());
 
         // Invalid: zero spending key
         let mut invalid = valid.clone();
-        invalid.spending_pk = KyberPublicKey::default();
+        invalid.spending_pub = Secp256k1PublicKey::default();
         assert!(invalid.validate().is_err());
+    }
+
+    #[test]
+    fn test_meta_address_rejects_v1() {
+        let mut meta = MetaAddress::new(
+            test_spending_pub(7),
+            KyberPublicKey::from_array([3u8; KYBER_PUBLIC_KEY_SIZE]),
+        );
+        meta.version = 1;
+        assert!(meta.validate().is_err(), "v1 meta-address must be rejected");
     }
 
     #[test]
