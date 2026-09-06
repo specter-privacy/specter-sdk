@@ -11,7 +11,10 @@
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-use crate::constants::{KYBER_PUBLIC_KEY_SIZE, KYBER_SECRET_KEY_SIZE};
+use crate::constants::{
+    KYBER_PUBLIC_KEY_SIZE, KYBER_SECRET_KEY_SIZE, SECP256K1_PUBLIC_KEY_SIZE,
+    SECP256K1_SECRET_KEY_SIZE,
+};
 use crate::error::{Result, SpecterError};
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -207,28 +210,200 @@ impl std::fmt::Debug for KeyPair {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// SECP256K1 SPENDING KEYS (PROTOCOL v2)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// A compressed secp256k1 public key (33 bytes) — the recipient's *spending*
+/// public key as published in a v2 meta-address.
+///
+/// The sender uses this to derive the stealth *address* (`P = B + t·G`). It is
+/// safe to share publicly and is validated to be a valid on-curve point.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Secp256k1PublicKey {
+    bytes: [u8; SECP256K1_PUBLIC_KEY_SIZE],
+}
+
+impl Secp256k1PublicKey {
+    /// Creates a public key from raw bytes, validating it is a canonical,
+    /// on-curve, compressed secp256k1 point.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() != SECP256K1_PUBLIC_KEY_SIZE {
+            return Err(SpecterError::InvalidKeySize {
+                expected: SECP256K1_PUBLIC_KEY_SIZE,
+                actual: bytes.len(),
+            });
+        }
+        // Reject garbage / off-curve / identity points at the boundary.
+        k256::PublicKey::from_sec1_bytes(bytes).map_err(|_| {
+            SpecterError::InvalidMetaAddress("spending key is not a valid secp256k1 point".into())
+        })?;
+        let mut arr = [0u8; SECP256K1_PUBLIC_KEY_SIZE];
+        arr.copy_from_slice(bytes);
+        Ok(Self { bytes: arr })
+    }
+
+    /// Creates a public key from a fixed-size array without curve validation.
+    ///
+    /// Prefer [`Secp256k1PublicKey::from_bytes`] for untrusted input.
+    pub fn from_array(bytes: [u8; SECP256K1_PUBLIC_KEY_SIZE]) -> Self {
+        Self { bytes }
+    }
+
+    /// Returns the raw compressed bytes.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Returns the compressed bytes as a fixed-size array reference.
+    pub fn as_array(&self) -> &[u8; SECP256K1_PUBLIC_KEY_SIZE] {
+        &self.bytes
+    }
+
+    /// Returns the hex-encoded compressed public key (no `0x` prefix).
+    pub fn to_hex(&self) -> String {
+        hex::encode(self.bytes)
+    }
+
+    /// Parses from a hex string (with or without `0x` prefix), validating the point.
+    pub fn from_hex(s: &str) -> Result<Self> {
+        let s = s.strip_prefix("0x").unwrap_or(s);
+        let bytes = hex::decode(s)?;
+        Self::from_bytes(&bytes)
+    }
+
+    /// Returns the underlying `k256::PublicKey`. Infallible because the bytes
+    /// were validated on construction (via `from_bytes`/`from_hex`).
+    pub fn to_k256(&self) -> Result<k256::PublicKey> {
+        k256::PublicKey::from_sec1_bytes(&self.bytes).map_err(|_| {
+            SpecterError::InvalidMetaAddress("spending key is not a valid secp256k1 point".into())
+        })
+    }
+}
+
+impl std::fmt::Debug for Secp256k1PublicKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Secp256k1PublicKey({})", self.to_hex())
+    }
+}
+
+impl Default for Secp256k1PublicKey {
+    fn default() -> Self {
+        Self {
+            bytes: [0u8; SECP256K1_PUBLIC_KEY_SIZE],
+        }
+    }
+}
+
+impl Serialize for Secp256k1PublicKey {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        s.serialize_str(&self.to_hex())
+    }
+}
+
+impl<'de> Deserialize<'de> for Secp256k1PublicKey {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        Self::from_hex(&s).map_err(serde::de::Error::custom)
+    }
+}
+
+/// A secp256k1 secret scalar (32 bytes) — the recipient's *spending* secret key.
+///
+/// This is the crown-jewel secret: it controls **every** stealth address the
+/// recipient will ever receive. It must never leave the owner's device. Zeroized
+/// on drop; never logged.
+#[derive(Zeroize, ZeroizeOnDrop)]
+pub struct Secp256k1SecretKey {
+    bytes: [u8; SECP256K1_SECRET_KEY_SIZE],
+}
+
+impl Secp256k1SecretKey {
+    /// Creates a secret key from raw bytes, validating it is a non-zero scalar
+    /// in `[1, n)`.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() != SECP256K1_SECRET_KEY_SIZE {
+            return Err(SpecterError::InvalidKeySize {
+                expected: SECP256K1_SECRET_KEY_SIZE,
+                actual: bytes.len(),
+            });
+        }
+        k256::SecretKey::from_slice(bytes).map_err(|_| SpecterError::InvalidKeySize {
+            expected: SECP256K1_SECRET_KEY_SIZE,
+            actual: bytes.len(),
+        })?;
+        let mut arr = [0u8; SECP256K1_SECRET_KEY_SIZE];
+        arr.copy_from_slice(bytes);
+        Ok(Self { bytes: arr })
+    }
+
+    /// Returns the raw secret bytes. Handle with care — never log or transmit.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Returns the underlying `k256::SecretKey`.
+    pub fn to_k256(&self) -> Result<k256::SecretKey> {
+        k256::SecretKey::from_slice(&self.bytes).map_err(|_| SpecterError::InvalidKeySize {
+            expected: SECP256K1_SECRET_KEY_SIZE,
+            actual: self.bytes.len(),
+        })
+    }
+}
+
+impl std::fmt::Debug for Secp256k1SecretKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Secp256k1SecretKey([REDACTED])")
+    }
+}
+
+/// A complete secp256k1 spending key pair (public + secret).
+#[derive(ZeroizeOnDrop)]
+pub struct Secp256k1KeyPair {
+    /// Public key — part of the meta-address (safe to share).
+    #[zeroize(skip)]
+    pub public: Secp256k1PublicKey,
+    /// Secret key — never leaves the device (auto-zeroized).
+    pub secret: Secp256k1SecretKey,
+}
+
+impl Secp256k1KeyPair {
+    /// Creates a spending key pair from public and secret keys.
+    pub fn new(public: Secp256k1PublicKey, secret: Secp256k1SecretKey) -> Self {
+        Self { public, secret }
+    }
+}
+
+impl std::fmt::Debug for Secp256k1KeyPair {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Secp256k1KeyPair")
+            .field("public", &self.public)
+            .field("secret", &"[REDACTED]")
+            .finish()
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // SPECTER KEY TYPES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/// Spending key pair - used to spend from stealth addresses.
-///
-/// The spending public key is part of the meta-address.
-/// The spending secret key is used to derive stealth private keys.
-pub type SpendingKeyPair = KeyPair;
+/// Spending key pair (v2) — a secp256k1 keypair used to spend from stealth
+/// addresses. The public key is part of the meta-address; the secret key is used
+/// to derive stealth spend keys and must never leave the owner's device.
+pub type SpendingKeyPair = Secp256k1KeyPair;
 
-/// Viewing key pair - used to scan for incoming payments.
+/// Viewing key pair — an ML-KEM-768 keypair used to scan for incoming payments.
 ///
-/// The viewing public key is part of the meta-address.
-/// The viewing secret key can be shared with third parties (e.g., tax auditors)
-/// to allow them to see incoming payments without spending ability.
+/// The viewing public key is part of the meta-address. The viewing secret key
+/// can be shared with third parties (e.g. an auditor or a scanning service) to
+/// allow them to *detect* incoming payments without any ability to spend.
 pub type ViewingKeyPair = KeyPair;
 
-/// Complete SPECTER key set (spending + viewing).
+/// Complete SPECTER key set (secp256k1 spending + ML-KEM viewing).
 #[derive(ZeroizeOnDrop)]
 pub struct SpecterKeys {
-    /// Keys for spending from stealth addresses
+    /// secp256k1 keys for spending from stealth addresses
     pub spending: SpendingKeyPair,
-    /// Keys for viewing/scanning announcements
+    /// ML-KEM keys for viewing/scanning announcements
     pub viewing: ViewingKeyPair,
 }
 
