@@ -384,6 +384,15 @@ impl AnnouncementStats {
         Self::default()
     }
 
+    /// Reverses [`Self::add`] for a removed announcement (e.g. a released
+    /// reservation). Counts saturate at zero; the timestamp high-water marks
+    /// are informational and intentionally left untouched.
+    pub fn remove(&mut self, announcement: &Announcement) {
+        self.total_count = self.total_count.saturating_sub(1);
+        let bucket = &mut self.view_tag_distribution[announcement.view_tag as usize];
+        *bucket = bucket.saturating_sub(1);
+    }
+
     /// Updates stats with a new announcement.
     pub fn add(&mut self, announcement: &Announcement) {
         self.total_count += 1;

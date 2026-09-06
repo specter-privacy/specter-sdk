@@ -23,6 +23,23 @@ pub const KYBER_CIPHERTEXT_SIZE: usize = 1088;
 pub const KYBER_SHARED_SECRET_SIZE: usize = 32;
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// SECP256K1 SIZES (SPENDING KEY, PROTOCOL v2)
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// As of protocol v2 the *spending* key is a secp256k1 keypair (not ML-KEM). This
+// is what makes stealth addresses genuinely one-way: the sender can derive the
+// stealth *address* from the public spending key, but only the holder of the
+// secret spending scalar can derive the spend key. See `specter-crypto::derive`.
+//
+// The *viewing* key remains ML-KEM-768 so payment discovery stays post-quantum.
+
+/// Size of a compressed secp256k1 public key in bytes (0x02/0x03 prefix + X).
+pub const SECP256K1_PUBLIC_KEY_SIZE: usize = 33;
+
+/// Size of a secp256k1 secret scalar in bytes.
+pub const SECP256K1_SECRET_KEY_SIZE: usize = 32;
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // VIEW TAG CONSTANTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -74,6 +91,12 @@ pub const DOMAIN_ETH_ADDRESS: &[u8] = b"SPECTER_ETH_ADDRESS_V1";
 /// Domain separator for Ethereum secp256k1 key derivation (stealth address = eth address).
 pub const DOMAIN_ETH_KEY: &[u8] = b"SPECTER_ETH_KEY_V1";
 
+/// Domain separator for the v2 stealth tweak scalar `t = H(shared_secret)`.
+///
+/// The tweak is the additive secp256k1 scalar that shifts the recipient's
+/// spending key to a one-time stealth key: `P = B + t·G`, `p = b + t (mod n)`.
+pub const DOMAIN_STEALTH_TWEAK: &[u8] = b"SPECTER_STEALTH_TWEAK_V2";
+
 /// Domain separator for metadata encryption key derivation (AES-256-GCM key).
 pub const DOMAIN_META_ENC_KEY: &[u8] = b"SPECTER_META_ENC_KEY_V1";
 
@@ -96,11 +119,15 @@ pub const DOMAIN_DB_IP_HASH: &[u8] = b"SPECTER_DB_IP_HASH_V1";
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// Current protocol version.
-/// Increment when making breaking changes to serialization formats.
-pub const PROTOCOL_VERSION: u8 = 1;
+///
+/// v2 (breaking): the spending key is secp256k1 and stealth keys use additive
+/// tweak derivation (`P = B + t·G`). v1 meta-addresses and v1 stealth payments
+/// are NOT compatible and are rejected — v1 stealth keys were derivable by the
+/// sender and must be treated as compromised.
+pub const PROTOCOL_VERSION: u8 = 2;
 
-/// Minimum supported protocol version for backward compatibility.
-pub const MIN_PROTOCOL_VERSION: u8 = 1;
+/// Minimum supported protocol version. v1 is rejected everywhere.
+pub const MIN_PROTOCOL_VERSION: u8 = 2;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ETHEREUM CONSTANTS
@@ -156,9 +183,10 @@ pub const SUI_TESTNET_RPC_URL: &str = "https://fullnode.testnet.sui.io:443";
 // SERIALIZATION CONSTANTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/// Size of serialized MetaAddress (version + spending_pk + viewing_pk).
-/// 1 + 1184 + 1184 = 2369 bytes
-pub const META_ADDRESS_SERIALIZED_SIZE: usize = 1 + KYBER_PUBLIC_KEY_SIZE + KYBER_PUBLIC_KEY_SIZE;
+/// Size of serialized MetaAddress v2 (version + secp256k1 spending_pub + ML-KEM viewing_pk).
+/// 1 + 33 + 1184 = 1218 bytes
+pub const META_ADDRESS_SERIALIZED_SIZE: usize =
+    1 + SECP256K1_PUBLIC_KEY_SIZE + KYBER_PUBLIC_KEY_SIZE;
 
 /// Size of serialized Announcement (ephemeral_key + view_tag + timestamp).
 /// 1088 + 1 + 8 = 1097 bytes (plus optional fields)
@@ -196,8 +224,8 @@ mod tests {
 
     #[test]
     fn test_meta_address_size() {
-        // version (1) + spending_pk (1184) + viewing_pk (1184)
-        assert_eq!(META_ADDRESS_SERIALIZED_SIZE, 2369);
+        // v2: version (1) + secp256k1 spending_pub (33) + ML-KEM viewing_pk (1184)
+        assert_eq!(META_ADDRESS_SERIALIZED_SIZE, 1218);
     }
 
     #[test]
@@ -210,6 +238,7 @@ mod tests {
             DOMAIN_SPENDING_SEED,
             DOMAIN_ETH_ADDRESS,
             DOMAIN_ETH_KEY,
+            DOMAIN_STEALTH_TWEAK,
             DOMAIN_META_ENC_KEY,
             DOMAIN_META_ENC_NONCE,
             DOMAIN_DB_HMAC_KEY,
