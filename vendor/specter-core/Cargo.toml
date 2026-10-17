@@ -15,6 +15,9 @@ hex = { version = "0.4", features = ["serde"] }
 thiserror = { version = "1.0" }
 # Security
 zeroize = { version = "1.7", features = ["derive"] }
+# secp256k1 spending key (protocol v2): validates compressed public keys on-curve.
+k256 = { version = "0.13", features = ["ecdsa"] }
+
 # Async
 async-trait = { version = "0.1" }
 # Time
