@@ -46,8 +46,9 @@ pub mod view_tag;
 // Re-export main functions at crate root
 pub use db_keys::{DbKeys, WRAPPED_SECRET_SIZE};
 pub use derive::{
-    derive_eth_address, derive_eth_address_from_seed, derive_stealth_keys,
-    derive_stealth_sui_address, derive_sui_address_from_seed,
+    derive_eth_address_from_seed, derive_stealth_address, derive_stealth_keys,
+    derive_stealth_sui_address, derive_sui_address_from_seed, generate_spending_keypair,
+    StealthKeys, StealthPrivateKey,
 };
 pub use hash::{shake256, shake256_xof};
 pub use kyber::{decapsulate, encapsulate, generate_keypair, KyberCiphertext};
