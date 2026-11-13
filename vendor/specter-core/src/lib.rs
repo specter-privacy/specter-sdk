@@ -24,6 +24,7 @@
 
 pub mod constants;
 pub mod error;
+pub mod redact;
 pub mod resolver;
 pub mod traits;
 pub mod types;
