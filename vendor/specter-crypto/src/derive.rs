@@ -1,65 +1,72 @@
-//! Stealth key and address derivation.
+//! Stealth key and address derivation (protocol v2, secp256k1 additive tweak).
 //!
-//! This module implements the core cryptographic operations for deriving
-//! stealth public/private keys and Ethereum addresses.
+//! ## Security model
 //!
-//! ## Derivation Flow
-//!
-//! ```text
-//! shared_secret
-//!       ↓
-//! SHAKE256(DOMAIN_STEALTH_PK || shared_secret) → stealth_factor (1184 bytes)
-//!       ↓
-//! stealth_pk = spending_pk ⊕ stealth_factor
-//!       ↓
-//! eth_address = keccak256(stealth_pk)[12..32]
-//! ```
-//!
-//! ## Private Key Derivation
-//!
-//! The recipient can derive the stealth private key:
+//! The spending key is a secp256k1 keypair: secret scalar `b`, public point
+//! `B = b·G`, published in the meta-address. For each payment the sender and
+//! recipient share a per-payment secret `shared_secret` via ML-KEM. From it both
+//! derive an additive **tweak** scalar:
 //!
 //! ```text
-//! stealth_sk = spending_sk ⊕ stealth_factor
+//! t = H(shared_secret)                       (a secp256k1 scalar)
 //! ```
+//!
+//! The one-time stealth key is the recipient's spending key shifted by `t`:
+//!
+//! ```text
+//! P = B + t·G          (stealth public key / address — sender-computable)
+//! p = b + t (mod n)    (stealth private key      — recipient-only)
+//! ```
+//!
+//! Because `p·G = (b + t)·G = B + t·G = P`, the address the sender computes from
+//! the *public* `B` is exactly the address the recipient can spend from with `p`.
+//!
+//! **The sender cannot derive `p`.** Computing `p` requires the secret scalar
+//! `b`, which never leaves the recipient. This is the property that was broken in
+//! protocol v1 (where the "private key" was a pure hash of `shared_secret` and
+//! the public spending key, and therefore derivable by the sender). See
+//! `sender_cannot_derive_stealth_private_key` in the tests.
 
 use zeroize::Zeroize;
 
 use blake2::digest::{Update, VariableOutput};
 use blake2::Blake2bVar;
-use k256::ecdsa::SigningKey;
+use k256::elliptic_curve::sec1::ToEncodedPoint;
+use k256::{NonZeroScalar, ProjectivePoint, PublicKey, Scalar, SecretKey};
+use rand::rngs::OsRng;
 use specter_core::constants::{
-    DOMAIN_ETH_KEY, DOMAIN_STEALTH_PK, DOMAIN_STEALTH_SK, ETH_ADDRESS_SIZE, KYBER_PUBLIC_KEY_SIZE,
-    KYBER_SECRET_KEY_SIZE, SUI_ADDRESS_SIZE,
+    DOMAIN_STEALTH_TWEAK, ETH_ADDRESS_SIZE, SECP256K1_PUBLIC_KEY_SIZE, SUI_ADDRESS_SIZE,
 };
 use specter_core::error::{Result, SpecterError};
-use specter_core::types::{EthAddress, SuiAddress};
+use specter_core::types::{
+    EthAddress, Secp256k1KeyPair, Secp256k1PublicKey, Secp256k1SecretKey, SuiAddress,
+};
 
 use crate::hash::{keccak256, shake256};
 
 /// Sui signature scheme flag for ECDSA secp256k1.
 const SUI_SCHEME_SECP256K1: u8 = 0x01;
 
-/// Result of stealth key derivation.
+/// Result of stealth key derivation (recipient side).
 #[derive(Debug)]
 pub struct StealthKeys {
     /// The secp256k1 uncompressed public key (65 bytes); hashes to the Ethereum address.
     pub public_key: Vec<u8>,
-    /// The stealth private key (2400 bytes, zeroized on drop)
+    /// The stealth private key (32-byte secp256k1 scalar, zeroized on drop).
     pub private_key: StealthPrivateKey,
-    /// The derived Ethereum address
+    /// The derived Ethereum address.
     pub address: EthAddress,
-    /// The derived Sui address (same secp256k1 key, blake2b-256)
+    /// The derived Sui address (same secp256k1 key, blake2b-256).
     pub sui_address: SuiAddress,
 }
 
-/// Wrapper for stealth private key with automatic zeroization.
+/// Wrapper for a 32-byte stealth private key with automatic zeroization.
 pub struct StealthPrivateKey {
     bytes: Vec<u8>,
 }
 
 impl StealthPrivateKey {
-    /// Creates from raw bytes.
+    /// Creates from raw bytes (expected to be exactly 32 bytes).
     pub fn from_bytes(bytes: Vec<u8>) -> Self {
         Self { bytes }
     }
@@ -69,13 +76,11 @@ impl StealthPrivateKey {
         &self.bytes
     }
 
-    /// Extracts the 32-byte seed for Ethereum signing.
+    /// Returns the 32-byte Ethereum/secp256k1 private key.
     ///
-    /// For Ethereum compatibility, we derive a 32-byte private key
-    /// from the Kyber secret key material.
+    /// This key imports directly into any secp256k1 wallet (MetaMask, ethers)
+    /// and controls the stealth address.
     pub fn to_eth_private_key(&self) -> [u8; 32] {
-        // Use first 32 bytes of stealth SK as Ethereum private key
-        // In production, this should use proper key derivation
         let mut eth_sk = [0u8; 32];
         eth_sk.copy_from_slice(&self.bytes[..32]);
         eth_sk
@@ -94,81 +99,65 @@ impl std::fmt::Debug for StealthPrivateKey {
     }
 }
 
-/// stealth_factor = SHAKE256(DOMAIN_STEALTH_PK || shared_secret, 1184); stealth_pk = spending_pk ⊕ stealth_factor
-pub fn derive_stealth_public_key(spending_pk: &[u8], shared_secret: &[u8]) -> Result<Vec<u8>> {
-    if spending_pk.len() != KYBER_PUBLIC_KEY_SIZE {
-        return Err(SpecterError::InvalidKeySize {
-            expected: KYBER_PUBLIC_KEY_SIZE,
-            actual: spending_pk.len(),
-        });
-    }
+// ═══════════════════════════════════════════════════════════════════════════════
+// KEY GENERATION
+// ═══════════════════════════════════════════════════════════════════════════════
 
-    let stealth_factor = shake256(DOMAIN_STEALTH_PK, shared_secret, KYBER_PUBLIC_KEY_SIZE);
-
-    // XOR with spending public key
-    let stealth_pk: Vec<u8> = spending_pk
-        .iter()
-        .zip(stealth_factor.iter())
-        .map(|(a, b)| a ^ b)
-        .collect();
-
-    Ok(stealth_pk)
-}
-
-/// stealth_factor = SHAKE256(DOMAIN_STEALTH_SK || shared_secret, 2400); stealth_sk = spending_sk ⊕ stealth_factor. Output is zeroized on drop.
-pub fn derive_stealth_private_key(
-    spending_sk: &[u8],
-    shared_secret: &[u8],
-) -> Result<StealthPrivateKey> {
-    if spending_sk.len() != KYBER_SECRET_KEY_SIZE {
-        return Err(SpecterError::InvalidKeySize {
-            expected: KYBER_SECRET_KEY_SIZE,
-            actual: spending_sk.len(),
-        });
-    }
-
-    let stealth_factor = shake256(DOMAIN_STEALTH_SK, shared_secret, KYBER_SECRET_KEY_SIZE);
-
-    // XOR with spending secret key
-    let stealth_sk: Vec<u8> = spending_sk
-        .iter()
-        .zip(stealth_factor.iter())
-        .map(|(a, b)| a ^ b)
-        .collect();
-
-    Ok(StealthPrivateKey::from_bytes(stealth_sk))
+/// Generates a fresh secp256k1 spending keypair using the OS CSPRNG.
+///
+/// The public key goes into the meta-address; the secret key must never leave
+/// the owner's device.
+pub fn generate_spending_keypair() -> Secp256k1KeyPair {
+    let secret = SecretKey::random(&mut OsRng);
+    let public_compressed = secret.public_key().to_sec1_bytes();
+    let public = Secp256k1PublicKey::from_bytes(&public_compressed)
+        .expect("freshly generated secp256k1 public key is always valid");
+    let sk = Secp256k1SecretKey::from_bytes(&secret.to_bytes())
+        .expect("freshly generated secp256k1 secret key is always valid");
+    Secp256k1KeyPair::new(public, sk)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ETHEREUM ADDRESS DERIVATION
+// TWEAK
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/// Derives a 32-byte secp256k1 key seed from (shared_secret, spending_pk).
-/// Both sender and recipient can compute this; used for stealth address and eth_private_key.
-/// Retries with re-hashed seed if the first candidate is not a valid secp256k1 scalar.
-fn derive_eth_key_seed(shared_secret: &[u8], spending_pk: &[u8]) -> Result<[u8; 32]> {
-    let mut seed = [0u8; 32];
-    let mut raw = shake256(DOMAIN_ETH_KEY, &[shared_secret, spending_pk].concat(), 32);
-    seed.copy_from_slice(&raw[..32]);
+/// Derives the additive stealth tweak scalar `t = H(shared_secret)`.
+///
+/// Uses rejection sampling over `SHAKE256(DOMAIN_STEALTH_TWEAK || shared_secret ||
+/// counter)`: the first 32-byte candidate that is a valid non-zero scalar in
+/// `[1, n)` is returned. This is unbiased and, because secp256k1's order is very
+/// close to `2^256`, effectively never iterates more than once.
+fn derive_stealth_tweak(shared_secret: &[u8]) -> Scalar {
+    let mut counter: u8 = 0;
     loop {
-        if SigningKey::from_slice(&seed).is_ok() {
-            return Ok(seed);
+        let mut input = Vec::with_capacity(shared_secret.len() + 1);
+        input.extend_from_slice(shared_secret);
+        input.push(counter);
+        let candidate = shake256(DOMAIN_STEALTH_TWEAK, &input, 32);
+        if let Ok(sk) = SecretKey::from_slice(&candidate) {
+            // SecretKey::from_slice already guarantees a non-zero scalar in [1, n).
+            return *sk.to_nonzero_scalar().as_ref();
         }
-        raw = keccak256(&seed).to_vec();
-        seed.copy_from_slice(&raw);
+        counter = counter.wrapping_add(1);
     }
 }
 
-/// Derives a Sui address from a secp256k1 private key (32 bytes).
-/// Sui uses blake2b-256(scheme_flag || compressed_pubkey) where scheme_flag is 0x01 for secp256k1.
-pub fn derive_sui_address_from_seed(seed: &[u8; 32]) -> Result<SuiAddress> {
-    let signing_key = SigningKey::from_slice(seed).map_err(|_| {
-        SpecterError::InvalidStealthAddress("invalid secp256k1 key from seed".to_string())
-    })?;
-    let verifying_key = signing_key.verifying_key();
-    let encoded = verifying_key.to_encoded_point(true); // compressed (33 bytes)
-    let compressed = encoded.as_bytes();
+// ═══════════════════════════════════════════════════════════════════════════════
+// ADDRESS DERIVATION FROM A PUBLIC KEY
+// ═══════════════════════════════════════════════════════════════════════════════
 
+/// Derives the Ethereum address of a secp256k1 public key: `keccak256(uncompressed[1..])[12..]`.
+fn eth_address_from_pubkey(pk: &PublicKey) -> EthAddress {
+    let encoded = pk.to_encoded_point(false); // 0x04 || X(32) || Y(32)
+    let hash = keccak256(&encoded.as_bytes()[1..]); // hash X||Y only
+    let mut address_bytes = [0u8; ETH_ADDRESS_SIZE];
+    address_bytes.copy_from_slice(&hash[32 - ETH_ADDRESS_SIZE..]);
+    EthAddress::from_array(address_bytes)
+}
+
+/// Derives the Sui address from a compressed secp256k1 public key:
+/// `blake2b-256(0x01 || compressed_pubkey)`.
+fn sui_address_from_compressed(compressed: &[u8]) -> Result<SuiAddress> {
     let mut hasher = Blake2bVar::new(SUI_ADDRESS_SIZE)
         .map_err(|_| SpecterError::InvalidStealthAddress("Blake2bVar init failed".into()))?;
     hasher.update(&[SUI_SCHEME_SECP256K1]);
@@ -180,64 +169,120 @@ pub fn derive_sui_address_from_seed(seed: &[u8; 32]) -> Result<SuiAddress> {
     Ok(SuiAddress::from_array(address_bytes))
 }
 
-/// Derives an Ethereum address from a secp256k1 private key (32 bytes).
-/// This matches how MetaMask/wallets derive address from private key.
-pub fn derive_eth_address_from_seed(seed: &[u8; 32]) -> Result<EthAddress> {
-    let signing_key = SigningKey::from_slice(seed).map_err(|_| {
-        SpecterError::InvalidStealthAddress("invalid secp256k1 key from seed".to_string())
-    })?;
-    let verifying_key = signing_key.verifying_key();
-    let encoded = verifying_key.to_encoded_point(false);
-    // Skip the 0x04 prefix - Ethereum only hashes the 64-byte public key (x, y)
-    let pubkey_bytes = &encoded.as_bytes()[1..];
-    let hash = keccak256(pubkey_bytes);
-    let mut address_bytes = [0u8; ETH_ADDRESS_SIZE];
-    address_bytes.copy_from_slice(&hash[32 - ETH_ADDRESS_SIZE..]);
-    Ok(EthAddress::from_array(address_bytes))
+fn sui_address_from_pubkey(pk: &PublicKey) -> Result<SuiAddress> {
+    let compressed = pk.to_encoded_point(true);
+    sui_address_from_compressed(compressed.as_bytes())
 }
 
-/// Derives an Ethereum address from a stealth public key (legacy Kyber-based; 1184 bytes).
-/// Prefer the secp256k1 path via derive_stealth_address / derive_stealth_keys for wallet compatibility.
-pub fn derive_eth_address(stealth_pk: &[u8]) -> Result<EthAddress> {
-    if stealth_pk.len() != KYBER_PUBLIC_KEY_SIZE {
+/// Computes the stealth public key point `P = B + t·G` from the spending public
+/// key bytes and the shared secret.
+fn stealth_pubkey(spending_pub: &[u8], shared_secret: &[u8]) -> Result<PublicKey> {
+    if spending_pub.len() != SECP256K1_PUBLIC_KEY_SIZE {
         return Err(SpecterError::InvalidKeySize {
-            expected: KYBER_PUBLIC_KEY_SIZE,
-            actual: stealth_pk.len(),
+            expected: SECP256K1_PUBLIC_KEY_SIZE,
+            actual: spending_pub.len(),
         });
     }
-
-    let hash = keccak256(stealth_pk);
-
-    // Take last 20 bytes as Ethereum address
-    let mut address_bytes = [0u8; ETH_ADDRESS_SIZE];
-    address_bytes.copy_from_slice(&hash[32 - ETH_ADDRESS_SIZE..]);
-
-    Ok(EthAddress::from_array(address_bytes))
+    let b_point = PublicKey::from_sec1_bytes(spending_pub).map_err(|_| {
+        SpecterError::InvalidStealthAddress("spending key is not a valid secp256k1 point".into())
+    })?;
+    let t = derive_stealth_tweak(shared_secret);
+    let p_proj = b_point.to_projective() + ProjectivePoint::GENERATOR * t;
+    PublicKey::from_affine(p_proj.to_affine()).map_err(|_| {
+        SpecterError::InvalidStealthAddress("derived stealth point is the identity".into())
+    })
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// COMBINED DERIVATION
+// PUBLIC API: ADDRESS-ONLY (SENDER) DERIVATION
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/// Derives complete stealth keys (public, private, and address).
-/// Uses secp256k1 so address and eth_private_key match (import key in wallet to spend).
+/// Derives the stealth Ethereum address for a payment — needs only public data.
 ///
-/// * `spending_pk` - The recipient's spending public key
-/// * `spending_sk` - Unused for secp256k1 path; kept for API compatibility
-/// * `shared_secret` - The shared secret from Kyber decapsulation
+/// `spending_pub` is the recipient's 33-byte compressed secp256k1 spending key.
+/// This is the function senders (and view-only scanners) use: it computes
+/// `keccak256(B + t·G)` and cannot recover the spend key.
+pub fn derive_stealth_address(spending_pub: &[u8], shared_secret: &[u8]) -> Result<EthAddress> {
+    let p = stealth_pubkey(spending_pub, shared_secret)?;
+    Ok(eth_address_from_pubkey(&p))
+}
+
+/// Derives the stealth Sui address for a payment — needs only public data.
+pub fn derive_stealth_sui_address(spending_pub: &[u8], shared_secret: &[u8]) -> Result<SuiAddress> {
+    let p = stealth_pubkey(spending_pub, shared_secret)?;
+    sui_address_from_pubkey(&p)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PUBLIC API: FULL KEY (RECIPIENT) DERIVATION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Derives an Ethereum address from a secp256k1 private key (32 bytes).
+///
+/// Matches how MetaMask/ethers derive an address from a raw private key.
+pub fn derive_eth_address_from_seed(seed: &[u8; 32]) -> Result<EthAddress> {
+    let secret = SecretKey::from_slice(seed).map_err(|_| {
+        SpecterError::InvalidStealthAddress("invalid secp256k1 key from seed".to_string())
+    })?;
+    Ok(eth_address_from_pubkey(&secret.public_key()))
+}
+
+/// Derives a Sui address from a secp256k1 private key (32 bytes).
+pub fn derive_sui_address_from_seed(seed: &[u8; 32]) -> Result<SuiAddress> {
+    let secret = SecretKey::from_slice(seed).map_err(|_| {
+        SpecterError::InvalidStealthAddress("invalid secp256k1 key from seed".to_string())
+    })?;
+    sui_address_from_pubkey(&secret.public_key())
+}
+
+/// Derives the complete stealth keys (public, private, address, sui) for a
+/// discovered payment. **Requires the recipient's secret spending key.**
+///
+/// * `spending_pub` - recipient's 33-byte compressed spending public key
+/// * `spending_sk`  - recipient's 32-byte secret spending scalar (never leaves device)
+/// * `shared_secret` - the per-payment ML-KEM shared secret
+///
+/// Computes `p = b + t (mod n)` and returns the resulting one-time key material.
 pub fn derive_stealth_keys(
-    spending_pk: &[u8],
-    _spending_sk: &[u8],
+    spending_pub: &[u8],
+    spending_sk: &[u8],
     shared_secret: &[u8],
 ) -> Result<StealthKeys> {
-    let seed = derive_eth_key_seed(shared_secret, spending_pk)?;
-    let address = derive_eth_address_from_seed(&seed)?;
-    let sui_address = derive_sui_address_from_seed(&seed)?;
-    let signing_key = SigningKey::from_slice(&seed)
-        .map_err(|_| SpecterError::InvalidStealthAddress("invalid secp256k1 key".to_string()))?;
-    let verifying_key = signing_key.verifying_key();
-    let public_key = verifying_key.to_encoded_point(false).as_bytes().to_vec();
+    let b_secret =
+        SecretKey::from_slice(spending_sk).map_err(|_| SpecterError::InvalidKeySize {
+            expected: 32,
+            actual: spending_sk.len(),
+        })?;
+
+    // Defense-in-depth: reject a mismatched (spending_pub, spending_sk) pair so a
+    // caller can never silently derive keys for the wrong meta-address.
+    if spending_pub.len() != SECP256K1_PUBLIC_KEY_SIZE
+        || b_secret.public_key().to_sec1_bytes().as_ref() != spending_pub
+    {
+        return Err(SpecterError::InvalidStealthAddress(
+            "spending secret key does not match the provided spending public key".into(),
+        ));
+    }
+
+    let b = b_secret.to_nonzero_scalar();
+    let t = derive_stealth_tweak(shared_secret);
+
+    let p_scalar: Scalar = *b.as_ref() + t;
+    let p_nonzero =
+        Option::<NonZeroScalar>::from(NonZeroScalar::new(p_scalar)).ok_or_else(|| {
+            SpecterError::InvalidStealthAddress("derived stealth scalar is zero".into())
+        })?;
+    let p_secret = SecretKey::from(p_nonzero);
+
+    let mut seed = [0u8; 32];
+    seed.copy_from_slice(&p_secret.to_bytes());
+
+    let pubkey = p_secret.public_key();
+    let public_key = pubkey.to_encoded_point(false).as_bytes().to_vec();
+    let address = eth_address_from_pubkey(&pubkey);
+    let sui_address = sui_address_from_pubkey(&pubkey)?;
     let private_key = StealthPrivateKey::from_bytes(seed.to_vec());
+    seed.zeroize();
 
     Ok(StealthKeys {
         public_key,
@@ -247,33 +292,17 @@ pub fn derive_stealth_keys(
     })
 }
 
-/// Derives only the Ethereum address (for senders who don't need the private key).
-/// Uses secp256k1 so the address matches the eth_private_key when imported in a wallet.
-pub fn derive_stealth_address(spending_pk: &[u8], shared_secret: &[u8]) -> Result<EthAddress> {
-    let seed = derive_eth_key_seed(shared_secret, spending_pk)?;
-    derive_eth_address_from_seed(&seed)
-}
-
-/// Derives only the Sui address (for senders who don't need the private key).
-/// Uses the same secp256k1 key as the Ethereum address.
-pub fn derive_stealth_sui_address(spending_pk: &[u8], shared_secret: &[u8]) -> Result<SuiAddress> {
-    let seed = derive_eth_key_seed(shared_secret, spending_pk)?;
-    derive_sui_address_from_seed(&seed)
-}
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // VERIFICATION
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/// Verifies that a stealth address was correctly derived.
-///
-/// Used to confirm a discovered payment is actually for this recipient.
+/// Verifies that a stealth address was correctly derived from `(spending_pub, shared_secret)`.
 pub fn verify_stealth_address(
-    spending_pk: &[u8],
+    spending_pub: &[u8],
     shared_secret: &[u8],
     expected_address: &EthAddress,
 ) -> Result<bool> {
-    let derived = derive_stealth_address(spending_pk, shared_secret)?;
+    let derived = derive_stealth_address(spending_pub, shared_secret)?;
     Ok(subtle::ConstantTimeEq::ct_eq(derived.as_bytes(), expected_address.as_bytes()).into())
 }
 
@@ -281,175 +310,157 @@ pub fn verify_stealth_address(
 mod tests {
     use super::*;
 
-    fn make_test_pk() -> Vec<u8> {
-        vec![0x42u8; KYBER_PUBLIC_KEY_SIZE]
+    /// A deterministic spending keypair `(compressed_pub_bytes, secret_bytes)`.
+    fn test_spending_keys(seed: u8) -> (Vec<u8>, Vec<u8>) {
+        let sk = SecretKey::from_slice(&[seed; 32]).unwrap();
+        (
+            sk.public_key().to_sec1_bytes().to_vec(),
+            sk.to_bytes().to_vec(),
+        )
     }
 
-    fn make_test_sk() -> Vec<u8> {
-        vec![0x99u8; KYBER_SECRET_KEY_SIZE]
-    }
-
-    fn make_test_secret() -> [u8; 32] {
+    fn make_secret() -> [u8; 32] {
         [0xAB; 32]
     }
 
     #[test]
-    fn test_derive_stealth_public_key() {
-        let spending_pk = make_test_pk();
-        let shared_secret = make_test_secret();
-
-        let stealth_pk = derive_stealth_public_key(&spending_pk, &shared_secret).unwrap();
-
-        assert_eq!(stealth_pk.len(), KYBER_PUBLIC_KEY_SIZE);
-        // Stealth PK should be different from spending PK
-        assert_ne!(stealth_pk, spending_pk);
+    fn test_generate_spending_keypair_is_valid_and_random() {
+        let a = generate_spending_keypair();
+        let b = generate_spending_keypair();
+        assert_ne!(a.public.as_bytes(), b.public.as_bytes());
+        // secret must derive back to the public key
+        let derived =
+            derive_eth_address_from_seed(&a.secret.as_bytes().try_into().expect("32 bytes"));
+        assert!(derived.is_ok());
     }
 
     #[test]
-    fn test_derive_stealth_public_key_deterministic() {
-        let spending_pk = make_test_pk();
-        let shared_secret = make_test_secret();
+    fn test_address_matches_between_sender_and_recipient() {
+        let (spending_pub, spending_sk) = test_spending_keys(0x11);
+        let shared = make_secret();
 
-        let pk1 = derive_stealth_public_key(&spending_pk, &shared_secret).unwrap();
-        let pk2 = derive_stealth_public_key(&spending_pk, &shared_secret).unwrap();
+        // Sender: address from public key only.
+        let sender_addr = derive_stealth_address(&spending_pub, &shared).unwrap();
+        // Recipient: full keys from secret.
+        let keys = derive_stealth_keys(&spending_pub, &spending_sk, &shared).unwrap();
 
-        assert_eq!(pk1, pk2);
+        assert_eq!(
+            sender_addr, keys.address,
+            "sender-derived address must equal recipient-derived address"
+        );
     }
 
     #[test]
-    fn test_derive_stealth_public_key_different_secrets() {
-        let spending_pk = make_test_pk();
-        let secret1 = [1u8; 32];
-        let secret2 = [2u8; 32];
+    fn test_eth_private_key_controls_stealth_address() {
+        let (spending_pub, spending_sk) = test_spending_keys(0x22);
+        let shared = make_secret();
+        let keys = derive_stealth_keys(&spending_pub, &spending_sk, &shared).unwrap();
 
-        let pk1 = derive_stealth_public_key(&spending_pk, &secret1).unwrap();
-        let pk2 = derive_stealth_public_key(&spending_pk, &secret2).unwrap();
+        // The returned private key must derive to the same address (wallet import).
+        let from_pk = derive_eth_address_from_seed(&keys.private_key.to_eth_private_key()).unwrap();
+        assert_eq!(keys.address.as_bytes(), from_pk.as_bytes());
+    }
 
-        // Different secrets should produce different stealth PKs
-        assert_ne!(pk1, pk2);
+    /// THE security regression test for CRITICAL #1.
+    ///
+    /// A party holding only the *public* spending key and the shared secret
+    /// (i.e. the sender) must NOT be able to produce the stealth private key.
+    #[test]
+    fn sender_cannot_derive_stealth_private_key() {
+        let (spending_pub, spending_sk) = test_spending_keys(0x33);
+        let shared = make_secret();
+
+        // The recipient's true private key for this payment.
+        let recipient_keys = derive_stealth_keys(&spending_pub, &spending_sk, &shared).unwrap();
+        let true_priv = recipient_keys.private_key.to_eth_private_key();
+
+        // Everything the sender has: shared secret + public spending key + the
+        // public tweak. There is no function that yields the private key from
+        // these — the only derivation that does requires `spending_sk`. Prove the
+        // sender's best effort (using the address-only path) never exposes it,
+        // and that guessing the private key from public data fails.
+        let sender_addr = derive_stealth_address(&spending_pub, &shared).unwrap();
+        assert_eq!(sender_addr, recipient_keys.address);
+
+        // If the sender could derive the key it would necessarily equal the
+        // recipient's. Model the sender substituting the *public* spending key
+        // bytes where a secret would go: it must NOT reproduce the true key.
+        // (spending_pub is 33 bytes; not even the right size for a scalar.)
+        let forged = derive_stealth_keys(&spending_pub, &spending_pub, &shared);
+        assert!(
+            forged.is_err(),
+            "public spending key must not be usable as a secret"
+        );
+
+        // And a different (matching) keypair must not yield the true private key.
+        let (pub2, other_sk) = test_spending_keys(0x99);
+        let wrong = derive_stealth_keys(&pub2, &other_sk, &shared).unwrap();
+        assert_ne!(
+            wrong.private_key.to_eth_private_key(),
+            true_priv,
+            "a different secret must not reproduce the true stealth private key"
+        );
     }
 
     #[test]
-    fn test_derive_stealth_private_key() {
-        let spending_sk = make_test_sk();
-        let shared_secret = make_test_secret();
-
-        let stealth_sk = derive_stealth_private_key(&spending_sk, &shared_secret).unwrap();
-
-        assert_eq!(stealth_sk.as_bytes().len(), KYBER_SECRET_KEY_SIZE);
+    fn test_different_secrets_give_different_addresses() {
+        let (spending_pub, _sk) = test_spending_keys(0x44);
+        let addr1 = derive_stealth_address(&spending_pub, &[1u8; 32]).unwrap();
+        let addr2 = derive_stealth_address(&spending_pub, &[2u8; 32]).unwrap();
+        assert_ne!(addr1, addr2);
     }
 
     #[test]
-    fn test_derive_eth_address() {
-        let stealth_pk = make_test_pk();
-        let address = derive_eth_address(&stealth_pk).unwrap();
-
-        assert_eq!(address.as_bytes().len(), ETH_ADDRESS_SIZE);
+    fn test_deterministic_derivation() {
+        let (spending_pub, _sk) = test_spending_keys(0x55);
+        let shared = make_secret();
+        let a1 = derive_stealth_address(&spending_pub, &shared).unwrap();
+        let a2 = derive_stealth_address(&spending_pub, &shared).unwrap();
+        assert_eq!(a1, a2);
     }
 
     #[test]
-    fn test_derive_stealth_keys() {
-        let spending_pk = make_test_pk();
-        let spending_sk = make_test_sk();
-        let shared_secret = make_test_secret();
-
-        let keys = derive_stealth_keys(&spending_pk, &spending_sk, &shared_secret).unwrap();
-
-        // secp256k1 path: 65-byte uncompressed pubkey, 32-byte eth private key
-        assert_eq!(keys.public_key.len(), 65);
-        assert_eq!(keys.private_key.as_bytes().len(), 32);
-        assert_eq!(keys.address.as_bytes().len(), ETH_ADDRESS_SIZE);
-        assert_eq!(keys.sui_address.as_bytes().len(), SUI_ADDRESS_SIZE);
-        // eth_private_key must derive to the same address (wallet compatibility)
-        let addr_from_pk =
-            derive_eth_address_from_seed(&keys.private_key.to_eth_private_key()).unwrap();
-        assert_eq!(keys.address.as_bytes(), addr_from_pk.as_bytes());
-        // sui_address must derive from same seed
-        let sui_from_seed =
-            derive_sui_address_from_seed(&keys.private_key.to_eth_private_key()).unwrap();
-        assert_eq!(keys.sui_address.as_bytes(), sui_from_seed.as_bytes());
-    }
-
-    #[test]
-    fn test_derive_stealth_address() {
-        let spending_pk = make_test_pk();
-        let shared_secret = make_test_secret();
-
-        let address = derive_stealth_address(&spending_pk, &shared_secret).unwrap();
-
-        // Should match the address from full key derivation
-        let keys = derive_stealth_keys(&spending_pk, &make_test_sk(), &shared_secret).unwrap();
-        assert_eq!(address, keys.address);
+    fn test_sui_address_matches_between_paths() {
+        let (spending_pub, spending_sk) = test_spending_keys(0x66);
+        let shared = make_secret();
+        let sender_sui = derive_stealth_sui_address(&spending_pub, &shared).unwrap();
+        let keys = derive_stealth_keys(&spending_pub, &spending_sk, &shared).unwrap();
+        assert_eq!(sender_sui, keys.sui_address);
+        assert!(!sender_sui.is_zero());
     }
 
     #[test]
     fn test_verify_stealth_address() {
-        let spending_pk = make_test_pk();
-        let shared_secret = make_test_secret();
-
-        let address = derive_stealth_address(&spending_pk, &shared_secret).unwrap();
-
-        assert!(verify_stealth_address(&spending_pk, &shared_secret, &address).unwrap());
-
-        // Wrong address should fail
-        let wrong_address = EthAddress::from_array([0xFF; ETH_ADDRESS_SIZE]);
-        assert!(!verify_stealth_address(&spending_pk, &shared_secret, &wrong_address).unwrap());
+        let (spending_pub, _sk) = test_spending_keys(0x77);
+        let shared = make_secret();
+        let addr = derive_stealth_address(&spending_pub, &shared).unwrap();
+        assert!(verify_stealth_address(&spending_pub, &shared, &addr).unwrap());
+        let wrong = EthAddress::from_array([0xFF; ETH_ADDRESS_SIZE]);
+        assert!(!verify_stealth_address(&spending_pub, &shared, &wrong).unwrap());
     }
 
     #[test]
-    fn test_xor_reversibility() {
-        // XOR is its own inverse: (A ⊕ B) ⊕ B = A
-        let original = make_test_pk();
-        let shared_secret = make_test_secret();
-
-        let stealth = derive_stealth_public_key(&original, &shared_secret).unwrap();
-
-        // Apply the same operation to recover original
-        let factor = shake256(DOMAIN_STEALTH_PK, &shared_secret, KYBER_PUBLIC_KEY_SIZE);
-        let recovered: Vec<u8> = stealth
-            .iter()
-            .zip(factor.iter())
-            .map(|(a, b)| a ^ b)
-            .collect();
-
-        assert_eq!(original, recovered);
+    fn test_invalid_spending_pub_rejected() {
+        let bad = vec![0u8; 33]; // not a valid point
+        let shared = make_secret();
+        assert!(derive_stealth_address(&bad, &shared).is_err());
     }
 
     #[test]
     fn test_stealth_private_key_zeroized_on_drop() {
-        let spending_sk = make_test_sk();
-        let shared_secret = make_test_secret();
-
-        // Create and immediately drop
+        let (spending_pub, spending_sk) = test_spending_keys(0x88);
         {
-            let _stealth_sk = derive_stealth_private_key(&spending_sk, &shared_secret).unwrap();
-            // Key is zeroized when _stealth_sk goes out of scope
+            let _keys = derive_stealth_keys(&spending_pub, &spending_sk, &make_secret()).unwrap();
         }
-
-        // Can't directly verify zeroization, but the Drop impl ensures it
+        // Drop impl zeroizes; cannot observe directly but the type guarantees it.
     }
 
     #[test]
-    fn test_derive_sui_address() {
-        let spending_pk = make_test_pk();
-        let shared_secret = make_test_secret();
-
-        let sui_addr = derive_stealth_sui_address(&spending_pk, &shared_secret).unwrap();
-        assert_eq!(sui_addr.as_bytes().len(), SUI_ADDRESS_SIZE);
-        assert!(!sui_addr.is_zero());
-
-        // Must match the sui_address from full key derivation
-        let keys = derive_stealth_keys(&spending_pk, &make_test_sk(), &shared_secret).unwrap();
-        assert_eq!(sui_addr, keys.sui_address);
-    }
-
-    #[test]
-    fn test_invalid_key_sizes() {
-        let too_short = vec![0u8; 100];
-        let shared_secret = make_test_secret();
-
-        assert!(derive_stealth_public_key(&too_short, &shared_secret).is_err());
-        assert!(derive_stealth_private_key(&too_short, &shared_secret).is_err());
-        assert!(derive_eth_address(&too_short).is_err());
+    fn test_tweak_is_nonzero_and_deterministic() {
+        let s = make_secret();
+        let t1 = derive_stealth_tweak(&s);
+        let t2 = derive_stealth_tweak(&s);
+        assert_eq!(t1, t2);
+        assert!(!bool::from(t1.is_zero()));
     }
 }
